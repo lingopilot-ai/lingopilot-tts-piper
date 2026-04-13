@@ -1,5 +1,6 @@
 /target/
 /build-target/
+/dist/
 *.pdb
 *.exe
 *.dll
