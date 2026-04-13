@@ -1,0 +1,32 @@
+[package]
+name = "lingopilot-tts-piper"
+version = "0.1.0"
+edition = "2021"
+description = "A fast, local TTS sidecar that reads JSON from stdin and outputs PCM audio. Powered by Piper + eSpeak-NG."
+license = "GPL-3.0-only"
+repository = "https://github.com/lingopilot-ai/lingopilot-tts-piper"
+authors = ["LingoPilot Labs", "Paulo Corcino"]
+
+[[bin]]
+name = "lingopilot-tts-piper"
+path = "src/main.rs"
+
+[dependencies]
+piper-rs = { version = "0.1.9", default-features = false }
+ort = { version = "=2.0.0-rc.9", features = ["load-dynamic"] }
+ort-sys = "=2.0.0-rc.9"
+espeak-rs-sys = "0.1.9"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+[patch.crates-io]
+# Patched: removed explicit msvcrtd link that conflicts with modern UCRT in debug builds.
+espeak-rs-sys = { path = "vendor/espeak-rs-sys" }
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = "symbols"
+panic = "abort"

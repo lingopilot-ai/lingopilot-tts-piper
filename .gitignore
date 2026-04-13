@@ -1,0 +1,10 @@
+/target/
+/build-target/
+*.pdb
+*.exe
+*.dll
+*.so
+*.dylib
+.env
+.vscode/
+.idea/
