@@ -9,7 +9,6 @@
 .env
 .vscode/
 .idea/
-.github
 docs/
 AGENTS.md
 BACKLOG.md
