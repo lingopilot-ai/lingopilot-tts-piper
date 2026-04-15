@@ -8,11 +8,11 @@ A fast, local TTS sidecar that reads newline-delimited JSON requests from `stdin
 
 | Platform | GitHub Actions validation | Official GitHub Release asset | Current status |
 |----------|---------------------------|-------------------------------|----------------|
-| Windows x86_64 | `cargo check --locked`, `cargo test --locked` | Yes | Current downloadable artifact target |
-| Linux x86_64 | `cargo check --locked`, `cargo test --locked` | No | CI build/test coverage only |
-| macOS | `cargo check --locked`, `cargo test --locked` | No | CI build/test coverage only |
+| Windows x86_64 | `cargo check --locked`, `cargo test --locked`, `cargo build --release --locked` | Yes | Current downloadable artifact target |
+| Linux x86_64 | `cargo check --locked`, `cargo test --locked`, `cargo build --release --locked` | No | CI-validated compile target |
+| macOS | `cargo check --locked`, `cargo test --locked`, `cargo build --release --locked` | No | CI-validated compile target |
 
-Linux and macOS remain part of the validation matrix to reduce portability risk, but they are not yet official release artifact targets.
+Linux and macOS are validated as compile targets in CI, but they are not yet official release artifact targets.
 
 ## Differences from `lingopilot-tts-kokoro`
 
@@ -555,11 +555,11 @@ Repository readiness gate commands:
 
 GitHub Actions also defines a platform matrix in `.github/workflows/ci.yml`:
 
-- `windows-latest`: `cargo check --locked`, `cargo test --locked`
-- `ubuntu-latest`: `cargo check --locked`, `cargo test --locked`
-- `macos-latest`: `cargo check --locked`, `cargo test --locked`
+- `windows-latest`: `cargo check --locked`, `cargo test --locked`, `cargo build --release --locked`
+- `ubuntu-latest`: `cargo check --locked`, `cargo test --locked`, `cargo build --release --locked`
+- `macos-latest`: `cargo check --locked`, `cargo test --locked`, `cargo build --release --locked`
 
-Those CI runs reduce cross-platform risk, but they do not by themselves promote Linux or macOS to official release artifact targets.
+Those CI runs validate that Linux and macOS remain compile-ready targets, but they do not by themselves promote Linux or macOS to official release artifact targets.
 
 ## Building
 
@@ -588,7 +588,7 @@ The script auto-detects Visual Studio, LLVM, and Ninja and sets the required env
 ### Build (Linux / macOS)
 
 ```bash
-cargo build --release
+cargo build --release --locked
 ```
 
 Ensure `cmake`, `ninja`, and `libclang` are installed via your package manager.

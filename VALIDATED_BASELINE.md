@@ -18,7 +18,7 @@ Validated locally in this repository:
 - Automated coverage includes Unicode and escaped-newline request handling.
 - Piper models are cached by resolved voice config path for the lifetime of the process.
 - Protocol/log separation is enforced: protocol traffic stays on `stdout`, logs stay on `stderr`.
-- CI runs `cargo check --locked` and `cargo test --locked` on Windows, Linux, and macOS.
+- CI runs `cargo check --locked`, `cargo test --locked`, and `cargo build --release --locked` on Windows, Linux, and macOS.
 - Windows release packaging, checksum generation, and packaged startup smoke testing are defined in repository-owned scripts and workflows.
 - Repo-owned scripts now exist for:
   - canonical real-voice fixture download plus compatible `ORT_DYLIB_PATH` provisioning
