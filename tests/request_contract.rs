@@ -6,9 +6,27 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Value};
 
+#[path = "../src/protocol.rs"]
+mod protocol_contract;
+
 const REAL_VOICE_DIR_ENV: &str = "PIPER_TTS_REAL_VOICE_DIR";
 const REAL_VOICE_ID_ENV: &str = "PIPER_TTS_REAL_VOICE_ID";
 const LOG_ENV: &str = "PIPER_TTS_LOG";
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(tag = "type")]
+enum PeerCompatibleResponse {
+    #[serde(rename = "ready")]
+    Ready { version: String },
+    #[serde(rename = "audio")]
+    Audio {
+        byte_length: u32,
+        sample_rate: u32,
+        channels: u16,
+    },
+    #[serde(rename = "error")]
+    Error { message: String },
+}
 
 struct SidecarHarness {
     child: Child,
@@ -213,6 +231,29 @@ fn assert_stderr_is_plain_text(stderr: &str) {
     assert!(
         !stderr.contains("{\"type\""),
         "stderr must not contain protocol JSON"
+    );
+}
+
+fn assert_locked_error_prefix(message: &str, expected_prefix: &str) {
+    const ALLOWED_PREFIXES: [&str; 3] = [
+        "Invalid JSON request:",
+        "Invalid request payload:",
+        "Synthesis failed:",
+    ];
+
+    assert!(
+        ALLOWED_PREFIXES.contains(&expected_prefix),
+        "test must only assert locked error prefixes"
+    );
+    assert!(
+        ALLOWED_PREFIXES
+            .iter()
+            .any(|prefix| message.starts_with(prefix)),
+        "error message '{message}' did not use a locked prefix"
+    );
+    assert!(
+        message.starts_with(expected_prefix),
+        "error message '{message}' did not start with '{expected_prefix}'"
     );
 }
 
@@ -533,6 +574,24 @@ fn invalid_semantic_payload_returns_error_and_process_stays_alive() {
         (
             json!({
                 "text": "Hello",
+                "voice": " \n\t ",
+                "speed": 1.0,
+                "model_dir": valid_model_dir.path(),
+            }),
+            "voice must not be empty or whitespace",
+        ),
+        (
+            json!({
+                "text": "Hello",
+                "voice": "en_US-hfc_female-medium",
+                "speed": 1.0,
+                "model_dir": " \n\t ",
+            }),
+            "model_dir must not be empty or whitespace",
+        ),
+        (
+            json!({
+                "text": "Hello",
                 "voice": "en_US-hfc_female-medium",
                 "speed": 1.0,
                 "model_dir": "relative-model-dir",
@@ -567,7 +626,7 @@ fn invalid_semantic_payload_returns_error_and_process_stays_alive() {
         let message = error["message"]
             .as_str()
             .expect("error response should contain a message");
-        assert!(message.contains("Invalid request payload:"));
+        assert_locked_error_prefix(message, "Invalid request payload:");
         assert!(message.contains(expected_fragment));
 
         sidecar.send_json(valid_semantic_request(valid_model_dir.path()));
@@ -765,4 +824,165 @@ fn real_voice_fixture_allows_two_successive_audio_responses_when_configured() {
         !second_payload.is_empty(),
         "audio payload should not be empty"
     );
+}
+
+#[cfg(windows)]
+#[test]
+fn real_voice_fixture_supports_model_dir_with_space_and_non_ascii_when_configured() {
+    let Some(fixture) = real_voice_fixture_from_env() else {
+        eprintln!(
+            "skipping special-path real voice validation because {} and {} are not set",
+            REAL_VOICE_DIR_ENV, REAL_VOICE_ID_ENV
+        );
+        return;
+    };
+
+    let temp_dir = TempDir::new("real-voice-special-path");
+    let special_model_dir = temp_dir.path().join("space dir").join("acao-ação");
+    fs::create_dir_all(&special_model_dir).expect("special model dir should be created");
+
+    for extension in ["onnx", "onnx.json"] {
+        let source = fixture
+            .model_dir
+            .join(format!("{}.{}", fixture.voice_id, extension));
+        let destination = special_model_dir.join(format!("{}.{}", fixture.voice_id, extension));
+        fs::copy(&source, &destination).expect("voice fixture files should copy");
+    }
+
+    let mut sidecar = SidecarHarness::spawn();
+
+    let ready = sidecar.read_json_line();
+    assert_eq!(ready["type"], "ready");
+
+    sidecar.send_json(json!({
+        "text": "Real voice special path validation request.",
+        "voice": fixture.voice_id,
+        "speed": 1.0,
+        "model_dir": special_model_dir,
+    }));
+
+    let (header, payload) = read_audio_response_and_payload(&mut sidecar);
+    assert_eq!(header["type"], "audio");
+    assert_eq!(header["channels"], 1);
+    assert!(
+        header["sample_rate"]
+            .as_u64()
+            .expect("sample_rate should be present")
+            > 0
+    );
+    assert_eq!(
+        payload.len(),
+        header["byte_length"]
+            .as_u64()
+            .expect("byte_length should be present") as usize
+    );
+}
+
+#[test]
+fn protocol_responses_remain_peer_compatible() {
+    let responses = [
+        protocol_contract::TtsResponse::Ready {
+            version: env!("CARGO_PKG_VERSION").to_string(),
+        },
+        protocol_contract::TtsResponse::Audio {
+            byte_length: 24,
+            sample_rate: 22050,
+            channels: 1,
+        },
+        protocol_contract::TtsResponse::Error {
+            message: "Invalid request payload: example".to_string(),
+        },
+    ];
+
+    for response in responses {
+        let json = serde_json::to_string(&response).expect("response should serialize");
+        let parsed: PeerCompatibleResponse =
+            serde_json::from_str(&json).expect("peer-compatible parser should accept response");
+
+        match parsed {
+            PeerCompatibleResponse::Ready { version } => {
+                assert_eq!(version, env!("CARGO_PKG_VERSION"));
+            }
+            PeerCompatibleResponse::Audio {
+                byte_length,
+                sample_rate,
+                channels,
+            } => {
+                assert_eq!(byte_length, 24);
+                assert_eq!(sample_rate, 22050);
+                assert_eq!(channels, 1);
+            }
+            PeerCompatibleResponse::Error { message } => {
+                assert_locked_error_prefix(&message, "Invalid request payload:");
+            }
+        }
+    }
+}
+
+#[test]
+fn protocol_response_json_shapes_remain_exact() {
+    let ready = serde_json::to_value(protocol_contract::TtsResponse::Ready {
+        version: env!("CARGO_PKG_VERSION").to_string(),
+    })
+    .expect("ready response should serialize");
+    assert_eq!(
+        ready,
+        json!({
+            "type": "ready",
+            "version": env!("CARGO_PKG_VERSION"),
+        })
+    );
+
+    let audio = serde_json::to_value(protocol_contract::TtsResponse::Audio {
+        byte_length: 24,
+        sample_rate: 22050,
+        channels: 1,
+    })
+    .expect("audio response should serialize");
+    assert_eq!(
+        audio,
+        json!({
+            "type": "audio",
+            "byte_length": 24,
+            "sample_rate": 22050,
+            "channels": 1,
+        })
+    );
+
+    let error = serde_json::to_value(protocol_contract::TtsResponse::Error {
+        message: "Synthesis failed: example".to_string(),
+    })
+    .expect("error response should serialize");
+    assert_eq!(
+        error,
+        json!({
+            "type": "error",
+            "message": "Synthesis failed: example",
+        })
+    );
+}
+
+#[test]
+fn request_contract_fields_remain_exact() {
+    let request = json!({
+        "text": "Hello",
+        "voice": "en_US-hfc_female-medium",
+        "speed": 1.0,
+        "model_dir": "C:\\voices\\en_US-hfc_female-medium",
+    });
+
+    let mut field_names: Vec<&str> = request
+        .as_object()
+        .expect("request should be an object")
+        .keys()
+        .map(String::as_str)
+        .collect();
+    field_names.sort_unstable();
+
+    assert_eq!(field_names, vec!["model_dir", "speed", "text", "voice"]);
+
+    let parsed: protocol_contract::TtsRequest =
+        serde_json::from_value(request).expect("canonical request shape should deserialize");
+    assert_eq!(parsed.text, "Hello");
+    assert_eq!(parsed.voice, "en_US-hfc_female-medium");
 }

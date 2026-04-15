@@ -1,0 +1,52 @@
+Third-Party License Summary for lingopilot-tts-piper
+====================================================
+
+Project license context
+-----------------------
+
+`lingopilot-tts-piper` is distributed under GPL-3.0-only. In this repository,
+the binary links the vendored `espeak-rs-sys` crate, which wraps eSpeak-NG.
+That linkage determines the binary's GPL-3.0-only distribution posture.
+
+This file is a repository-authored summary for release packaging and operator
+visibility. It does not replace the original upstream license texts.
+
+Components
+----------
+
+1. Piper TTS
+   Upstream: https://github.com/rhasspy/piper
+   License: MIT
+   Role: upstream Piper project and model/runtime ecosystem reference
+
+2. piper-rs
+   Upstream: https://github.com/thewh1teagle/piper-rs
+   License: MIT
+   Role: Rust Piper model loading, phonemization bridge, and synthesis API
+
+3. ONNX Runtime
+   Upstream: https://github.com/microsoft/onnxruntime
+   License: MIT
+   Role: inference runtime used through `ort`
+
+4. ort / ort-sys
+   Upstream: https://github.com/pykeio/ort
+   License: MIT OR Apache-2.0
+   Role: Rust bindings and runtime integration for ONNX Runtime
+
+5. eSpeak-NG
+   Upstream: https://github.com/espeak-ng/espeak-ng
+   License: GPL-3.0
+   Role: phonemization runtime used by Piper through `espeak-rs` and `espeak-rs-sys`
+
+Operator note
+-------------
+
+Published release archives for this repository include:
+
+- `LICENSE` for the project
+- `README.md` for the public sidecar contract
+- this `THIRD_PARTY_LICENSES.txt` summary
+
+When updating dependencies or release packaging, keep this summary aligned with
+the repository's documented dependency and vendor policy.

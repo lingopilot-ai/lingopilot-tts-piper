@@ -14,6 +14,17 @@ A fast, local TTS sidecar that reads newline-delimited JSON requests from `stdin
 
 Linux and macOS remain part of the validation matrix to reduce portability risk, but they are not yet official release artifact targets.
 
+## Differences from `lingopilot-tts-kokoro`
+
+| Area | `lingopilot-tts-piper` | `lingopilot-tts-kokoro` |
+|------|-------------------------|-------------------------|
+| `speed` range | `0.5` to `5.5` inclusive | `0.5` to `2.0` inclusive |
+| Sample rate | Voice-dependent, typically `22050` | Fixed `24000` |
+| `model_dir` layout | Per-voice `<voice>.onnx` and `<voice>.onnx.json` files | Shared bundle with one model plus `voices*.bin` |
+| eSpeak linkage | Static linkage through `espeak-rs-sys` | Runtime loading via `libloading` |
+| Binary license | `GPL-3.0-only` | `Apache-2.0` |
+| eSpeak data handling | Startup-selected runtime also bridged through internal `PIPER_ESPEAKNG_DATA_DIRECTORY` | Startup-only selection without a repository-owned runtime env var |
+
 ## Quick Start
 
 ### 1. Download a Piper voice
@@ -76,6 +87,7 @@ lingopilot-tts-piper-v0.1.0-windows-x86_64/
   espeak-runtime/
   README.md
   LICENSE
+  THIRD_PARTY_LICENSES.txt
 ```
 
 Release operator flow:
@@ -92,6 +104,7 @@ Local Windows validation commands:
 .\build_windows.ps1 -Release
 .\scripts\Package-WindowsRelease.ps1 -Version v0.1.0
 .\scripts\Test-WindowsReleaseArchive.ps1 -ZipPath .\dist\lingopilot-tts-piper-v0.1.0-windows-x86_64.zip
+.\scripts\Verify-Readiness.ps1 -Packaged
 ```
 
 Published release verification command:
@@ -174,9 +187,9 @@ If startup validation fails:
 | Field | Type | Required | Contract |
 |-------|------|----------|----------|
 | `text` | string | yes | Text to synthesize. Must contain at least one non-whitespace character and be at most `8192` Unicode scalar values. |
-| `voice` | string | yes | Piper voice ID. Must exactly match `<voice>.onnx` and `<voice>.onnx.json` inside `model_dir`. |
+| `voice` | string | yes | Piper voice ID. Must contain at least one non-whitespace character and exactly match `<voice>.onnx` and `<voice>.onnx.json` inside `model_dir`. |
 | `speed` | number | no | Speed multiplier. Defaults to `1.0`. Must be finite and between `0.5` and `5.5` inclusive. |
-| `model_dir` | string | yes | Absolute path to an existing directory that contains the requested voice files. |
+| `model_dir` | string | yes | Absolute path to an existing directory that contains the requested voice files. Must contain at least one non-whitespace character. |
 
 Example request:
 
@@ -283,6 +296,8 @@ Example:
 This includes semantic validation failures and invalid request paths such as:
 
 - empty or whitespace-only `text`
+- empty or whitespace-only `voice`
+- empty or whitespace-only `model_dir`
 - `text` longer than `8192`
 - non-finite or out-of-range `speed`
 - non-absolute `model_dir`
@@ -465,6 +480,7 @@ Run `cargo test` to execute the automated protocol and validation suite for this
 - malformed JSON handling
 - rejection of legacy request fields
 - invalid payload validation
+- exact response JSON shape and locked error-prefix parity
 - Unicode and escaped-newline request text handling
 - deterministic missing-voice errors
 - multi-request same-process behavior
@@ -490,6 +506,14 @@ Windows operator validation command:
 $env:PIPER_TTS_REAL_VOICE_DIR = "C:\voices\en_US-hfc_female-medium"
 $env:PIPER_TTS_REAL_VOICE_ID = "en_US-hfc_female-medium"
 .\scripts\Test-RealVoiceFixture.ps1
+```
+
+Optional Windows special-path validation command:
+
+```powershell
+$env:PIPER_TTS_REAL_VOICE_DIR = "C:\voices\en_US-hfc_female-medium"
+$env:PIPER_TTS_REAL_VOICE_ID = "en_US-hfc_female-medium"
+cargo test --locked real_voice_fixture_supports_model_dir_with_space_and_non_ascii_when_configured -- --exact --nocapture
 ```
 
 If those environment variables are absent, the normal `cargo test --locked` run stays green and skips the real-voice success validation.
@@ -583,3 +607,5 @@ This is because [eSpeak-NG](https://github.com/espeak-ng/espeak-ng) is GPL v3. [
 | [eSpeak-NG](https://github.com/espeak-ng/espeak-ng) | GPL v3 |
 | [ONNX Runtime](https://github.com/microsoft/onnxruntime) | MIT |
 | [ort](https://github.com/pykeio/ort) | MIT / Apache 2.0 |
+
+The packaged Windows archive also includes `THIRD_PARTY_LICENSES.txt` with the repository's third-party license disclosure summary.

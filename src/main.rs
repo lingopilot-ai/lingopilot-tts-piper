@@ -1,8 +1,8 @@
 mod protocol;
 mod synthesis;
 
-use std::fmt;
 use std::ffi::{OsStr, OsString};
+use std::fmt;
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -98,12 +98,10 @@ fn main() -> ExitCode {
     // Initialize tracing (respects PIPER_TTS_LOG or RUST_LOG env vars)
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_env("PIPER_TTS_LOG").unwrap_or_else(
-                |_| {
-                    tracing_subscriber::EnvFilter::try_from_env("RUST_LOG")
-                        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn"))
-                },
-            ),
+            tracing_subscriber::EnvFilter::try_from_env("PIPER_TTS_LOG").unwrap_or_else(|_| {
+                tracing_subscriber::EnvFilter::try_from_env("RUST_LOG")
+                    .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn"))
+            }),
         )
         .with_writer(io::stderr)
         .with_ansi(false)
@@ -129,8 +127,8 @@ fn main() -> ExitCode {
     // Send ready signal
     if !send_response(
         &TtsResponse::Ready {
-        version: VERSION.to_string(),
-    },
+            version: VERSION.to_string(),
+        },
         "ready",
     ) {
         return ExitCode::FAILURE;
@@ -144,10 +142,7 @@ fn main() -> ExitCode {
         let line = match line {
             Ok(l) => l,
             Err(e) => {
-                tracing::error!(
-                    event = "stdin_read_failed",
-                    error = e.to_string()
-                );
+                tracing::error!(event = "stdin_read_failed", error = e.to_string());
                 break;
             }
         };
@@ -204,9 +199,12 @@ fn handle_request(synthesis_cache: &mut synthesis::SynthesisCache, req: TtsReque
             text_len,
             detail = message.as_str()
         );
-        let _ = send_response(&TtsResponse::Error {
-            message: format!("Invalid request payload: {}", message),
-        }, "error");
+        let _ = send_response(
+            &TtsResponse::Error {
+                message: format!("Invalid request payload: {}", message),
+            },
+            "error",
+        );
         return;
     }
 
@@ -295,9 +293,12 @@ fn handle_request(synthesis_cache: &mut synthesis::SynthesisCache, req: TtsReque
                 text_len,
                 detail = e.as_str()
             );
-            let _ = send_response(&TtsResponse::Error {
-                message: format!("Synthesis failed: {}", e),
-            }, "error");
+            let _ = send_response(
+                &TtsResponse::Error {
+                    message: format!("Synthesis failed: {}", e),
+                },
+                "error",
+            );
         }
     }
 }

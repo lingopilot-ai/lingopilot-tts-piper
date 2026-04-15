@@ -30,8 +30,9 @@ $binaryPath = Join-Path $repoRoot "target\release\lingopilot-tts-piper.exe"
 $runtimeDir = Join-Path $repoRoot "target\release\espeak-runtime"
 $readmePath = Join-Path $repoRoot "README.md"
 $licensePath = Join-Path $repoRoot "LICENSE"
+$thirdPartyLicensesPath = Join-Path $repoRoot "THIRD_PARTY_LICENSES.txt"
 
-foreach ($requiredPath in @($binaryPath, $runtimeDir, $readmePath, $licensePath)) {
+foreach ($requiredPath in @($binaryPath, $runtimeDir, $readmePath, $licensePath, $thirdPartyLicensesPath)) {
     if (-not (Test-Path $requiredPath)) {
         throw "Required release input is missing: $requiredPath"
     }
@@ -60,6 +61,7 @@ Copy-Item -LiteralPath $binaryPath -Destination (Join-Path $packageRoot "lingopi
 Copy-Item -LiteralPath $runtimeDir -Destination (Join-Path $packageRoot "espeak-runtime") -Recurse
 Copy-Item -LiteralPath $readmePath -Destination (Join-Path $packageRoot "README.md")
 Copy-Item -LiteralPath $licensePath -Destination (Join-Path $packageRoot "LICENSE")
+Copy-Item -LiteralPath $thirdPartyLicensesPath -Destination (Join-Path $packageRoot "THIRD_PARTY_LICENSES.txt")
 
 Compress-Archive -LiteralPath $packageRoot -DestinationPath $zipPath -Force
 

@@ -9,6 +9,5 @@
 .env
 .vscode/
 .idea/
-docs/
 AGENTS.md
 BACKLOG.md

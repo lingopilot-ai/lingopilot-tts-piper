@@ -70,8 +70,8 @@ impl SynthesisCache {
 }
 
 fn load_model_from_config(config_path: &Path) -> Result<SynthHandle, String> {
-    let model = from_config_path(config_path)
-        .map_err(|e| format!("Failed to load Piper voice: {}", e))?;
+    let model =
+        from_config_path(config_path).map_err(|e| format!("Failed to load Piper voice: {}", e))?;
     let synth = PiperSpeechSynthesizer::new(model)
         .map_err(|e| format!("Failed to create synthesizer: {}", e))?;
     Ok(Arc::new(synth))
@@ -306,7 +306,9 @@ fn ensure_is_file(path: &Path, missing_message: String) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{get_or_load_cached, resolve_voice_paths, validate_espeak_data_dir, validate_model_dir};
+    use super::{
+        get_or_load_cached, resolve_voice_paths, validate_espeak_data_dir, validate_model_dir,
+    };
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -564,10 +566,12 @@ mod tests {
             }
         };
 
-        let first = get_or_load_cached(&mut cache, &resolved_a.config_path, &loader, "voice config")
-            .expect("voice a should load");
-        let second = get_or_load_cached(&mut cache, &resolved_b.config_path, &loader, "voice config")
-            .expect("voice b should load");
+        let first =
+            get_or_load_cached(&mut cache, &resolved_a.config_path, &loader, "voice config")
+                .expect("voice a should load");
+        let second =
+            get_or_load_cached(&mut cache, &resolved_b.config_path, &loader, "voice config")
+                .expect("voice b should load");
 
         assert_eq!(first.0, "voice-a");
         assert_eq!(second.0, "voice-b");
@@ -625,9 +629,8 @@ mod tests {
             }
         };
 
-        let loaded =
-            get_or_load_cached(&mut cache, &resolved.config_path, &loader, "voice config")
-                .expect("load should succeed");
+        let loaded = get_or_load_cached(&mut cache, &resolved.config_path, &loader, "voice config")
+            .expect("load should succeed");
 
         let paths = observed_paths
             .lock()

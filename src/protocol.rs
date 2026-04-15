@@ -33,6 +33,14 @@ impl TtsRequest {
             return Err("Invalid text: text must not be empty or whitespace".to_string());
         }
 
+        if self.voice.trim().is_empty() {
+            return Err("voice must not be empty or whitespace".to_string());
+        }
+
+        if self.model_dir.trim().is_empty() {
+            return Err("model_dir must not be empty or whitespace".to_string());
+        }
+
         if self.text.chars().count() > MAX_TEXT_CHARS {
             return Err(format!(
                 "Invalid text: text must be at most {MAX_TEXT_CHARS} characters"
@@ -83,16 +91,28 @@ pub enum TtsResponse {
 mod tests {
     use super::TtsRequest;
 
-    fn parse_request(text: &str, speed: f32) -> TtsRequest {
-        serde_json::from_str(&format!(
-            r#"{{
-                "text":{text:?},
-                "voice":"en_US-hfc_female-medium",
-                "speed":{speed},
-                "model_dir":"C:\\voices\\en_US-hfc_female-medium"
-            }}"#
-        ))
+    fn parse_request_with_fields(
+        text: &str,
+        voice: &str,
+        speed: f32,
+        model_dir: &str,
+    ) -> TtsRequest {
+        serde_json::from_value(serde_json::json!({
+            "text": text,
+            "voice": voice,
+            "speed": speed,
+            "model_dir": model_dir,
+        }))
         .expect("request should deserialize")
+    }
+
+    fn parse_request(text: &str, speed: f32) -> TtsRequest {
+        parse_request_with_fields(
+            text,
+            "en_US-hfc_female-medium",
+            speed,
+            "C:\\voices\\en_US-hfc_female-medium",
+        )
     }
 
     #[test]
@@ -159,6 +179,29 @@ mod tests {
             .expect_err("whitespace-only text should fail");
 
         assert!(error.contains("text must not be empty or whitespace"));
+    }
+
+    #[test]
+    fn request_validation_rejects_whitespace_only_voice() {
+        let error = parse_request_with_fields(
+            "Hello",
+            " \n\t ",
+            1.0,
+            "C:\\voices\\en_US-hfc_female-medium",
+        )
+        .validate()
+        .expect_err("whitespace-only voice should fail");
+
+        assert_eq!(error, "voice must not be empty or whitespace");
+    }
+
+    #[test]
+    fn request_validation_rejects_whitespace_only_model_dir() {
+        let error = parse_request_with_fields("Hello", "en_US-hfc_female-medium", 1.0, " \n\t ")
+            .validate()
+            .expect_err("whitespace-only model_dir should fail");
+
+        assert_eq!(error, "model_dir must not be empty or whitespace");
     }
 
     #[test]
