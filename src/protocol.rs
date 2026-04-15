@@ -171,6 +171,20 @@ mod tests {
     }
 
     #[test]
+    fn request_validation_accepts_unicode_text() {
+        parse_request("Olá, 世界 👋", 1.0)
+            .validate()
+            .expect("Unicode text should pass");
+    }
+
+    #[test]
+    fn request_validation_accepts_text_with_newlines() {
+        parse_request("First line\nSecond line", 1.0)
+            .validate()
+            .expect("text with embedded newlines should pass");
+    }
+
+    #[test]
     fn request_validation_rejects_text_above_max_length() {
         let text = "a".repeat(8193);
         let error = parse_request(&text, 1.0)

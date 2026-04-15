@@ -78,7 +78,29 @@ lingopilot-tts-piper-v0.1.0-windows-x86_64/
   LICENSE
 ```
 
-PowerShell checksum verification example:
+Release operator flow:
+
+1. Ensure the local Windows release build, packaging, and packaged startup smoke test pass.
+2. Create and push a `v<crate-version>` tag.
+3. Wait for `.github/workflows/release.yml` to publish the GitHub Release assets.
+4. Download and verify the published asset plus checksum.
+5. Mark the release validated only after the downloaded zip passes the packaged startup smoke test.
+
+Local Windows validation commands:
+
+```powershell
+.\build_windows.ps1 -Release
+.\scripts\Package-WindowsRelease.ps1 -Version v0.1.0
+.\scripts\Test-WindowsReleaseArchive.ps1 -ZipPath .\dist\lingopilot-tts-piper-v0.1.0-windows-x86_64.zip
+```
+
+Published release verification command:
+
+```powershell
+.\scripts\Verify-PublishedRelease.ps1 -Version v0.1.0
+```
+
+Manual PowerShell checksum verification example:
 
 ```powershell
 $version = "v0.1.0"
@@ -168,6 +190,8 @@ Additional request rules:
 - `espeak_data_dir` is not part of the request contract. eSpeak is selected only at process startup.
 - Voice resolution is strict. If `<voice>.onnx` or `<voice>.onnx.json` is missing, the sidecar returns an `error` response and never falls back to a different model.
 - Piper models are cached by resolved voice config path for the lifetime of the process. Repeated requests for the same resolved voice reuse the loaded model/session.
+- `text` accepts Unicode input and may contain escaped newlines such as `\n` inside the JSON string, as long as the request itself remains one newline-delimited JSON object on `stdin`.
+- There is currently no separate pre-synthesis maximum audio-size contract. Output size is model- and text-dependent, bounded only by the accepted request shape and available process resources.
 
 ### Response Framing
 
@@ -441,8 +465,34 @@ Run `cargo test` to execute the automated protocol and validation suite for this
 - malformed JSON handling
 - rejection of legacy request fields
 - invalid payload validation
+- Unicode and escaped-newline request text handling
 - deterministic missing-voice errors
 - multi-request same-process behavior
+
+Opt-in real voice validation is available for release-readiness checks outside Git-tracked assets.
+
+Required environment variables:
+
+- `PIPER_TTS_REAL_VOICE_DIR`: absolute path to a directory containing one real Piper voice pair
+- `PIPER_TTS_REAL_VOICE_ID`: exact filename stem for that voice
+
+Targeted test command:
+
+```powershell
+$env:PIPER_TTS_REAL_VOICE_DIR = "C:\voices\en_US-hfc_female-medium"
+$env:PIPER_TTS_REAL_VOICE_ID = "en_US-hfc_female-medium"
+cargo test --locked real_voice_fixture_allows_two_successive_audio_responses_when_configured -- --exact --nocapture
+```
+
+Windows operator validation command:
+
+```powershell
+$env:PIPER_TTS_REAL_VOICE_DIR = "C:\voices\en_US-hfc_female-medium"
+$env:PIPER_TTS_REAL_VOICE_ID = "en_US-hfc_female-medium"
+.\scripts\Test-RealVoiceFixture.ps1
+```
+
+If those environment variables are absent, the normal `cargo test --locked` run stays green and skips the real-voice success validation.
 
 GitHub Actions also defines a platform matrix in `.github/workflows/ci.yml`:
 
@@ -487,7 +537,9 @@ Ensure `cmake`, `ninja`, and `libclang` are installed via your package manager.
 
 | Variable | Purpose |
 |----------|---------|
-| `LINGOPILOT_TTS_LOG` | Log level (`debug`, `info`, `warn`). Logs go to `stderr` in `level=<LEVEL> event=<EVENT> ...` format and never to `stdout`. |
+| `PIPER_TTS_LOG` | Log level (`debug`, `info`, `warn`). Logs go to `stderr` in `level=<LEVEL> event=<EVENT> ...` format and never to `stdout`. |
+| `PIPER_TTS_REAL_VOICE_DIR` | Development-only absolute path to a local real-voice fixture directory for release-readiness validation. Not required for normal builds or tests. |
+| `PIPER_TTS_REAL_VOICE_ID` | Development-only voice ID for the local real-voice fixture. Must match the `<voice_id>.onnx` and `<voice_id>.onnx.json` files in `PIPER_TTS_REAL_VOICE_DIR`. |
 | `ORT_DYLIB_PATH` | Path to `onnxruntime.dll` / `libonnxruntime.so` if not next to the binary. |
 
 ## Vendored `espeak-rs-sys`

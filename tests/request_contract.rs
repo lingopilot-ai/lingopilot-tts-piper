@@ -6,6 +6,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Value};
 
+const REAL_VOICE_DIR_ENV: &str = "PIPER_TTS_REAL_VOICE_DIR";
+const REAL_VOICE_ID_ENV: &str = "PIPER_TTS_REAL_VOICE_ID";
+const LOG_ENV: &str = "PIPER_TTS_LOG";
+
 struct SidecarHarness {
     child: Child,
     stdout: BufReader<ChildStdout>,
@@ -20,7 +24,7 @@ impl SidecarHarness {
     fn spawn_with_log_level(level: Option<&str>) -> Self {
         let mut command = sidecar_command();
         if let Some(level) = level {
-            command.env("LINGOPILOT_TTS_LOG", level);
+            command.env(LOG_ENV, level);
         }
 
         let mut child = command
@@ -62,6 +66,14 @@ impl SidecarHarness {
         serde_json::from_str(line.trim_end()).expect("sidecar should emit valid JSON")
     }
 
+    fn read_exact_bytes(&mut self, count: usize) -> Vec<u8> {
+        let mut buffer = vec![0u8; count];
+        self.stdout
+            .read_exact(&mut buffer)
+            .expect("stdout should contain the expected PCM payload");
+        buffer
+    }
+
     fn close_stdin(&mut self) {
         let _ = self.child.stdin.take();
     }
@@ -96,7 +108,7 @@ impl Drop for SidecarHarness {
 fn sidecar_command() -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_lingopilot-tts-piper"));
     command
-        .env_remove("LINGOPILOT_TTS_LOG")
+        .env_remove(LOG_ENV)
         .env_remove("RUST_LOG")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -118,6 +130,11 @@ fn unique_missing_path(prefix: &str) -> PathBuf {
 
 struct TempDir {
     path: PathBuf,
+}
+
+struct RealVoiceFixture {
+    model_dir: PathBuf,
+    voice_id: String,
 }
 
 impl TempDir {
@@ -146,12 +163,49 @@ fn built_espeak_runtime_dir() -> PathBuf {
 }
 
 fn valid_semantic_request(model_dir: &Path) -> Value {
+    valid_semantic_request_with_text(model_dir, "Hello from the new request contract")
+}
+
+fn valid_semantic_request_with_text(model_dir: &Path, text: &str) -> Value {
     json!({
-        "text": "Hello from the new request contract",
+        "text": text,
         "voice": "en_US-hfc_female-medium",
         "speed": 1.0,
         "model_dir": model_dir,
     })
+}
+
+fn real_voice_fixture_from_env() -> Option<RealVoiceFixture> {
+    let model_dir = std::env::var_os(REAL_VOICE_DIR_ENV);
+    let voice_id = std::env::var_os(REAL_VOICE_ID_ENV);
+
+    match (model_dir, voice_id) {
+        (None, None) => None,
+        (Some(_), None) | (None, Some(_)) => {
+            panic!(
+                "real voice validation requires both {REAL_VOICE_DIR_ENV} and {REAL_VOICE_ID_ENV}"
+            );
+        }
+        (Some(model_dir), Some(voice_id)) => Some(RealVoiceFixture {
+            model_dir: PathBuf::from(model_dir),
+            voice_id: voice_id
+                .into_string()
+                .expect("voice id env var should be valid UTF-8"),
+        }),
+    }
+}
+
+fn read_audio_response_and_payload(sidecar: &mut SidecarHarness) -> (Value, Vec<u8>) {
+    let header = sidecar.read_json_line();
+    assert_eq!(header["type"], "audio");
+
+    let byte_length = header["byte_length"]
+        .as_u64()
+        .expect("audio response should contain byte_length") as usize;
+    let payload = sidecar.read_exact_bytes(byte_length);
+    assert_eq!(payload.len(), byte_length);
+
+    (header, payload)
 }
 
 fn assert_stderr_is_plain_text(stderr: &str) {
@@ -323,6 +377,32 @@ fn valid_semantic_request_passes_contract_validation() {
     assert!(!message.contains("Invalid JSON request:"));
     assert!(!message.contains("unknown field"));
     assert!(!message.contains("missing field"));
+}
+
+#[test]
+fn unicode_and_escaped_newlines_remain_valid_until_missing_voice_resolution() {
+    let mut sidecar = SidecarHarness::spawn();
+    let model_dir = TempDir::new("unicode-escaped-newlines");
+
+    let ready = sidecar.read_json_line();
+    assert_eq!(ready["type"], "ready");
+
+    sidecar.send_json(json!({
+        "text": "Olá, 世界 👋\nSecond line stays inside the JSON string.",
+        "voice": "en_US-hfc_female-medium",
+        "speed": 1.0,
+        "model_dir": model_dir.path(),
+    }));
+
+    let error = sidecar.read_json_line();
+    assert_eq!(error["type"], "error");
+    let message = error["message"]
+        .as_str()
+        .expect("error response should contain a message");
+    assert!(message.contains("Invalid request payload:"));
+    assert!(message.contains("en_US-hfc_female-medium.onnx"));
+    assert!(!message.contains("Invalid JSON request:"));
+    assert!(!message.contains("text must"));
 }
 
 #[test]
@@ -517,7 +597,7 @@ fn process_can_restart_after_invalid_startup_and_then_emit_ready() {
 #[test]
 fn startup_warn_logging_keeps_stdout_protocol_only_and_stderr_text_only() {
     let output = sidecar_command()
-        .env("LINGOPILOT_TTS_LOG", "warn")
+        .env(LOG_ENV, "warn")
         .arg("--espeak-data-dir")
         .arg(built_espeak_runtime_dir())
         .output()
@@ -526,7 +606,11 @@ fn startup_warn_logging_keeps_stdout_protocol_only_and_stderr_text_only() {
     assert!(output.status.success());
 
     let stdout = String::from_utf8(output.stdout).expect("stdout should be UTF-8 JSON only");
-    assert_eq!(stdout.lines().count(), 1, "expected exactly one stdout line");
+    assert_eq!(
+        stdout.lines().count(),
+        1,
+        "expected exactly one stdout line"
+    );
     let ready: Value = serde_json::from_str(stdout.trim_end()).expect("ready should be valid JSON");
     assert_eq!(ready["type"], "ready");
 
@@ -537,7 +621,7 @@ fn startup_warn_logging_keeps_stdout_protocol_only_and_stderr_text_only() {
 #[test]
 fn startup_debug_logging_keeps_stdout_protocol_only_and_stderr_plain_text() {
     let output = sidecar_command()
-        .env("LINGOPILOT_TTS_LOG", "debug")
+        .env(LOG_ENV, "debug")
         .arg("--espeak-data-dir")
         .arg(built_espeak_runtime_dir())
         .output()
@@ -546,7 +630,11 @@ fn startup_debug_logging_keeps_stdout_protocol_only_and_stderr_plain_text() {
     assert!(output.status.success());
 
     let stdout = String::from_utf8(output.stdout).expect("stdout should be UTF-8 JSON only");
-    assert_eq!(stdout.lines().count(), 1, "expected exactly one stdout line");
+    assert_eq!(
+        stdout.lines().count(),
+        1,
+        "expected exactly one stdout line"
+    );
     let ready: Value = serde_json::from_str(stdout.trim_end()).expect("ready should be valid JSON");
     assert_eq!(ready["type"], "ready");
 
@@ -574,7 +662,10 @@ fn malformed_json_under_debug_logging_keeps_stdout_json_only_and_stderr_text_onl
 
     sidecar.close_stdin();
     let remaining_stdout = sidecar.read_remaining_stdout();
-    assert!(remaining_stdout.is_empty(), "stdout must not contain log output");
+    assert!(
+        remaining_stdout.is_empty(),
+        "stdout must not contain log output"
+    );
 
     let stderr = sidecar.shutdown_and_collect_stderr();
     assert!(stderr.contains("level=WARN event=request_rejected"));
@@ -612,10 +703,66 @@ fn missing_voice_under_debug_logging_uses_payload_error_prefix_and_text_stderr()
 
     sidecar.close_stdin();
     let remaining_stdout = sidecar.read_remaining_stdout();
-    assert!(remaining_stdout.is_empty(), "stdout must not contain log output");
+    assert!(
+        remaining_stdout.is_empty(),
+        "stdout must not contain log output"
+    );
 
     let stderr = sidecar.shutdown_and_collect_stderr();
     assert!(stderr.contains("level=WARN event=request_rejected"));
     assert!(stderr.contains("category=invalid_request_payload"));
     assert_stderr_is_plain_text(&stderr);
+}
+
+#[test]
+fn real_voice_fixture_allows_two_successive_audio_responses_when_configured() {
+    let Some(fixture) = real_voice_fixture_from_env() else {
+        eprintln!(
+            "skipping real voice validation because {} and {} are not set",
+            REAL_VOICE_DIR_ENV, REAL_VOICE_ID_ENV
+        );
+        return;
+    };
+
+    let mut sidecar = SidecarHarness::spawn();
+
+    let ready = sidecar.read_json_line();
+    assert_eq!(ready["type"], "ready");
+
+    let request = |text: &str| {
+        json!({
+            "text": text,
+            "voice": fixture.voice_id,
+            "speed": 1.0,
+            "model_dir": fixture.model_dir,
+        })
+    };
+
+    sidecar.send_json(request("Real voice fixture validation request one."));
+    let (first_header, first_payload) = read_audio_response_and_payload(&mut sidecar);
+    assert_eq!(first_header["channels"], 1);
+    assert!(
+        first_header["sample_rate"]
+            .as_u64()
+            .expect("sample_rate should be present")
+            > 0
+    );
+    assert!(
+        !first_payload.is_empty(),
+        "audio payload should not be empty"
+    );
+
+    sidecar.send_json(request("Real voice fixture validation request two."));
+    let (second_header, second_payload) = read_audio_response_and_payload(&mut sidecar);
+    assert_eq!(second_header["channels"], 1);
+    assert!(
+        second_header["sample_rate"]
+            .as_u64()
+            .expect("sample_rate should be present")
+            > 0
+    );
+    assert!(
+        !second_payload.is_empty(),
+        "audio payload should not be empty"
+    );
 }

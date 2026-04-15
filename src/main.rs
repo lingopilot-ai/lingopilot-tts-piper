@@ -95,10 +95,10 @@ fn format_string_value(value: &str) -> String {
 }
 
 fn main() -> ExitCode {
-    // Initialize tracing (respects LINGOPILOT_TTS_LOG or RUST_LOG env vars)
+    // Initialize tracing (respects PIPER_TTS_LOG or RUST_LOG env vars)
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_env("LINGOPILOT_TTS_LOG").unwrap_or_else(
+            tracing_subscriber::EnvFilter::try_from_env("PIPER_TTS_LOG").unwrap_or_else(
                 |_| {
                     tracing_subscriber::EnvFilter::try_from_env("RUST_LOG")
                         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn"))
