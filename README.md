@@ -56,7 +56,7 @@ $EspeakDir = (Resolve-Path .\target\release\espeak-runtime).Path
 On successful startup, the sidecar emits exactly one newline-delimited `ready` JSON object on `stdout`:
 
 ```json
-{"type":"ready","version":"0.1.1"}
+{"type":"ready","version":"0.1.2"}
 ```
 
 The `version` value comes from the package version at build time. If startup validation fails, the sidecar writes `Startup error: ...` to `stderr`, exits with a non-zero status, and emits no `ready` message.
@@ -72,17 +72,17 @@ Current release contract:
 - Checksum manifest: `lingopilot-tts-piper-v<version>-sha256.txt`
 - Download base: `https://github.com/lingopilot-ai/lingopilot-tts-piper/releases/download/v<version>/`
 
-Example URLs for `v0.1.1`:
+Example URLs for `v0.1.2`:
 
 ```text
-https://github.com/lingopilot-ai/lingopilot-tts-piper/releases/download/v0.1.1/lingopilot-tts-piper-v0.1.1-windows-x86_64.zip
-https://github.com/lingopilot-ai/lingopilot-tts-piper/releases/download/v0.1.1/lingopilot-tts-piper-v0.1.1-sha256.txt
+https://github.com/lingopilot-ai/lingopilot-tts-piper/releases/download/v0.1.2/lingopilot-tts-piper-v0.1.2-windows-x86_64.zip
+https://github.com/lingopilot-ai/lingopilot-tts-piper/releases/download/v0.1.2/lingopilot-tts-piper-v0.1.2-sha256.txt
 ```
 
 The Windows zip contains one top-level folder named after the asset:
 
 ```text
-lingopilot-tts-piper-v0.1.1-windows-x86_64/
+lingopilot-tts-piper-v0.1.2-windows-x86_64/
   lingopilot-tts-piper.exe
   espeak-runtime/
   README.md
@@ -102,33 +102,33 @@ Local Windows validation commands:
 
 ```powershell
 .\build_windows.ps1 -Release
-.\scripts\Package-WindowsRelease.ps1 -Version v0.1.1
-.\scripts\Test-WindowsReleaseArchive.ps1 -ZipPath .\dist\lingopilot-tts-piper-v0.1.1-windows-x86_64.zip
+.\scripts\Package-WindowsRelease.ps1 -Version v0.1.2
+.\scripts\Test-WindowsReleaseArchive.ps1 -ZipPath .\dist\lingopilot-tts-piper-v0.1.2-windows-x86_64.zip
 .\scripts\Verify-Readiness.ps1 -Packaged
 ```
 
 Optional publish helper for the Git branch + release tag flow:
 
 ```powershell
-.\scripts\Publish-ReleaseTag.ps1 -Version v0.1.1
+.\scripts\Publish-ReleaseTag.ps1 -Version v0.1.2
 ```
 
 If you also want the script to stage and create the release-preparation commit first:
 
 ```powershell
-.\scripts\Publish-ReleaseTag.ps1 -Version v0.1.1 -CommitMessage "Bump version to 0.1.1"
+.\scripts\Publish-ReleaseTag.ps1 -Version v0.1.2 -CommitMessage "Bump version to 0.1.2"
 ```
 
 Published release verification command:
 
 ```powershell
-.\scripts\Verify-PublishedRelease.ps1 -Version v0.1.1
+.\scripts\Verify-PublishedRelease.ps1 -Version v0.1.2
 ```
 
 Manual PowerShell checksum verification example:
 
 ```powershell
-$version = "v0.1.1"
+$version = "v0.1.2"
 $asset = "lingopilot-tts-piper-$version-windows-x86_64.zip"
 $checksum = "lingopilot-tts-piper-$version-sha256.txt"
 $baseUrl = "https://github.com/lingopilot-ai/lingopilot-tts-piper/releases/download/$version"
@@ -497,18 +497,28 @@ Run `cargo test` to execute the automated protocol and validation suite for this
 - deterministic missing-voice errors
 - multi-request same-process behavior
 
+To make release-readiness validation reproducible, download the canonical real voice fixture and the compatible ONNX Runtime dylib with the repository-owned script:
+
+```powershell
+.\scripts\Download-RealVoiceFixture.ps1
+```
+
+By default, the script downloads the canonical `en_US-hfc_female-medium` fixture from the official Hugging Face Piper voice URLs into `%LOCALAPPDATA%\LingoPilot\PiperVoices\en_US-hfc_female-medium`, downloads `onnxruntime.dll` `1.20.0` into `%LOCALAPPDATA%\LingoPilot\OnnxRuntime\1.20.0`, and prints the exact environment variable values to use for validation.
+
 Opt-in real voice validation is available for release-readiness checks outside Git-tracked assets.
 
 Required environment variables:
 
 - `PIPER_TTS_REAL_VOICE_DIR`: absolute path to a directory containing one real Piper voice pair
 - `PIPER_TTS_REAL_VOICE_ID`: exact filename stem for that voice
+- `ORT_DYLIB_PATH`: absolute path to a compatible `onnxruntime.dll` (`1.20.x` for `ort 2.0.0-rc.9`)
 
 Targeted test command:
 
 ```powershell
 $env:PIPER_TTS_REAL_VOICE_DIR = "C:\voices\en_US-hfc_female-medium"
 $env:PIPER_TTS_REAL_VOICE_ID = "en_US-hfc_female-medium"
+$env:ORT_DYLIB_PATH = "$env:LOCALAPPDATA\LingoPilot\OnnxRuntime\1.20.0\onnxruntime.dll"
 cargo test --locked real_voice_fixture_allows_two_successive_audio_responses_when_configured -- --exact --nocapture
 ```
 
@@ -517,6 +527,7 @@ Windows operator validation command:
 ```powershell
 $env:PIPER_TTS_REAL_VOICE_DIR = "C:\voices\en_US-hfc_female-medium"
 $env:PIPER_TTS_REAL_VOICE_ID = "en_US-hfc_female-medium"
+$env:ORT_DYLIB_PATH = "$env:LOCALAPPDATA\LingoPilot\OnnxRuntime\1.20.0\onnxruntime.dll"
 .\scripts\Test-RealVoiceFixture.ps1
 ```
 
@@ -525,10 +536,22 @@ Optional Windows special-path validation command:
 ```powershell
 $env:PIPER_TTS_REAL_VOICE_DIR = "C:\voices\en_US-hfc_female-medium"
 $env:PIPER_TTS_REAL_VOICE_ID = "en_US-hfc_female-medium"
+$env:ORT_DYLIB_PATH = "$env:LOCALAPPDATA\LingoPilot\OnnxRuntime\1.20.0\onnxruntime.dll"
 cargo test --locked real_voice_fixture_supports_model_dir_with_space_and_non_ascii_when_configured -- --exact --nocapture
 ```
 
 If those environment variables are absent, the normal `cargo test --locked` run stays green and skips the real-voice success validation.
+
+Repository readiness gate commands:
+
+```powershell
+.\scripts\Verify-Readiness.ps1
+.\scripts\Verify-Readiness.ps1 -RequireRealVoice
+.\scripts\Verify-Readiness.ps1 -Packaged
+.\scripts\Verify-Readiness.ps1 -Packaged -RequireRealVoice
+```
+
+`-RequireRealVoice` fails unless `PIPER_TTS_REAL_VOICE_DIR` and `PIPER_TTS_REAL_VOICE_ID` are set. It uses `ORT_DYLIB_PATH` when provided, otherwise falls back to the canonical runtime path created by `.\scripts\Download-RealVoiceFixture.ps1`.
 
 GitHub Actions also defines a platform matrix in `.github/workflows/ci.yml`:
 
@@ -557,6 +580,7 @@ Use the provided PowerShell script:
 ```powershell
 .\build_windows.ps1
 .\build_windows.ps1 -Release
+.\build_windows.ps1 -Release -Locked
 ```
 
 The script auto-detects Visual Studio, LLVM, and Ninja and sets the required environment variables for a Windows build.
@@ -577,6 +601,31 @@ Ensure `cmake`, `ninja`, and `libclang` are installed via your package manager.
 | `PIPER_TTS_REAL_VOICE_DIR` | Development-only absolute path to a local real-voice fixture directory for release-readiness validation. Not required for normal builds or tests. |
 | `PIPER_TTS_REAL_VOICE_ID` | Development-only voice ID for the local real-voice fixture. Must match the `<voice_id>.onnx` and `<voice_id>.onnx.json` files in `PIPER_TTS_REAL_VOICE_DIR`. |
 | `ORT_DYLIB_PATH` | Path to `onnxruntime.dll` / `libonnxruntime.so` if not next to the binary. |
+
+## Canonical Release Validation Flow
+
+Use this exact sequence for the first public Windows release:
+
+```powershell
+.\scripts\Download-RealVoiceFixture.ps1
+$env:PIPER_TTS_REAL_VOICE_DIR = "$env:LOCALAPPDATA\LingoPilot\PiperVoices\en_US-hfc_female-medium"
+$env:PIPER_TTS_REAL_VOICE_ID = "en_US-hfc_female-medium"
+$env:ORT_DYLIB_PATH = "$env:LOCALAPPDATA\LingoPilot\OnnxRuntime\1.20.0\onnxruntime.dll"
+
+.\scripts\Verify-Readiness.ps1 -RequireRealVoice
+.\build_windows.ps1 -Release -Locked
+.\scripts\Package-WindowsRelease.ps1 -Version v0.1.2
+.\scripts\Verify-Readiness.ps1 -Packaged -RequireRealVoice
+.\scripts\Publish-ReleaseTag.ps1 -Version v0.1.2
+.\scripts\Verify-PublishedRelease.ps1 -Version v0.1.2
+```
+
+Interpretation:
+
+- `Verify-Readiness.ps1 -RequireRealVoice` proves the local tree passes deterministic and real-voice validation.
+- `Verify-Readiness.ps1 -Packaged -RequireRealVoice` keeps the same real-voice gate while also verifying the most recent packaged Windows archive.
+- `Publish-ReleaseTag.ps1` pushes the branch and the `v0.1.2` tag.
+- `Verify-PublishedRelease.ps1` completes the downstream validation by checking the published GitHub asset and checksum from the release URL.
 
 ## Vendored `espeak-rs-sys`
 

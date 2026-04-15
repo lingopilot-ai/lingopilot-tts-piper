@@ -3,6 +3,7 @@ param(
     [string]$EspeakDataDir = (Join-Path (Join-Path $PSScriptRoot "..") "target\release\espeak-runtime"),
     [string]$ModelDir = $env:PIPER_TTS_REAL_VOICE_DIR,
     [string]$VoiceId = $env:PIPER_TTS_REAL_VOICE_ID,
+    [string]$OrtDylibPath = $env:ORT_DYLIB_PATH,
     [string]$Text = "Real voice release-readiness validation"
 )
 
@@ -92,6 +93,11 @@ if ([string]::IsNullOrWhiteSpace($ModelDir) -or [string]::IsNullOrWhiteSpace($Vo
 $resolvedBinaryPath = (Resolve-Path $BinaryPath).Path
 $resolvedEspeakDataDir = (Resolve-Path $EspeakDataDir).Path
 $resolvedModelDir = (Resolve-Path $ModelDir).Path
+$resolvedOrtDylibPath = $null
+
+if (-not [string]::IsNullOrWhiteSpace($OrtDylibPath)) {
+    $resolvedOrtDylibPath = (Resolve-Path $OrtDylibPath).Path
+}
 
 $process = $null
 
@@ -104,6 +110,9 @@ try {
     $startInfo.RedirectStandardInput = $true
     $startInfo.RedirectStandardOutput = $true
     $startInfo.RedirectStandardError = $true
+    if ($resolvedOrtDylibPath) {
+        $startInfo.Environment["ORT_DYLIB_PATH"] = $resolvedOrtDylibPath
+    }
 
     $process = [System.Diagnostics.Process]::new()
     $process.StartInfo = $startInfo

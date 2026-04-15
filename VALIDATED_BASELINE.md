@@ -21,6 +21,8 @@ Validated locally in this repository:
 - CI runs `cargo check --locked` and `cargo test --locked` on Windows, Linux, and macOS.
 - Windows release packaging, checksum generation, and packaged startup smoke testing are defined in repository-owned scripts and workflows.
 - Repo-owned scripts now exist for:
+  - canonical real-voice fixture download plus compatible `ORT_DYLIB_PATH` provisioning
   - local real-voice validation using `PIPER_TTS_REAL_VOICE_DIR` and `PIPER_TTS_REAL_VOICE_ID`
   - published GitHub Release asset download plus checksum verification
+- Local real-voice validation passed with exact `byte_length` checks using the canonical `en_US-hfc_female-medium` fixture and a compatible `onnxruntime.dll`.
 - Vendored `espeak-rs-sys` governance is documented in `docs/vendor-espeak-rs-sys.md`.
