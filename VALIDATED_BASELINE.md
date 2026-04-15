@@ -25,4 +25,5 @@ Validated locally in this repository:
   - local real-voice validation using `PIPER_TTS_REAL_VOICE_DIR` and `PIPER_TTS_REAL_VOICE_ID`
   - published GitHub Release asset download plus checksum verification
 - Local real-voice validation passed with exact `byte_length` checks using the canonical `en_US-hfc_female-medium` fixture and a compatible `onnxruntime.dll`.
+- The published `v0.1.2` GitHub Release asset and checksum were downloaded and verified through the documented downstream path.
 - Vendored `espeak-rs-sys` governance is documented in `docs/vendor-espeak-rs-sys.md`.
