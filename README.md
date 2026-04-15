@@ -56,7 +56,7 @@ $EspeakDir = (Resolve-Path .\target\release\espeak-runtime).Path
 On successful startup, the sidecar emits exactly one newline-delimited `ready` JSON object on `stdout`:
 
 ```json
-{"type":"ready","version":"0.1.0"}
+{"type":"ready","version":"0.1.1"}
 ```
 
 The `version` value comes from the package version at build time. If startup validation fails, the sidecar writes `Startup error: ...` to `stderr`, exits with a non-zero status, and emits no `ready` message.
@@ -72,17 +72,17 @@ Current release contract:
 - Checksum manifest: `lingopilot-tts-piper-v<version>-sha256.txt`
 - Download base: `https://github.com/lingopilot-ai/lingopilot-tts-piper/releases/download/v<version>/`
 
-Example URLs for `v0.1.0`:
+Example URLs for `v0.1.1`:
 
 ```text
-https://github.com/lingopilot-ai/lingopilot-tts-piper/releases/download/v0.1.0/lingopilot-tts-piper-v0.1.0-windows-x86_64.zip
-https://github.com/lingopilot-ai/lingopilot-tts-piper/releases/download/v0.1.0/lingopilot-tts-piper-v0.1.0-sha256.txt
+https://github.com/lingopilot-ai/lingopilot-tts-piper/releases/download/v0.1.1/lingopilot-tts-piper-v0.1.1-windows-x86_64.zip
+https://github.com/lingopilot-ai/lingopilot-tts-piper/releases/download/v0.1.1/lingopilot-tts-piper-v0.1.1-sha256.txt
 ```
 
 The Windows zip contains one top-level folder named after the asset:
 
 ```text
-lingopilot-tts-piper-v0.1.0-windows-x86_64/
+lingopilot-tts-piper-v0.1.1-windows-x86_64/
   lingopilot-tts-piper.exe
   espeak-runtime/
   README.md
@@ -102,21 +102,33 @@ Local Windows validation commands:
 
 ```powershell
 .\build_windows.ps1 -Release
-.\scripts\Package-WindowsRelease.ps1 -Version v0.1.0
-.\scripts\Test-WindowsReleaseArchive.ps1 -ZipPath .\dist\lingopilot-tts-piper-v0.1.0-windows-x86_64.zip
+.\scripts\Package-WindowsRelease.ps1 -Version v0.1.1
+.\scripts\Test-WindowsReleaseArchive.ps1 -ZipPath .\dist\lingopilot-tts-piper-v0.1.1-windows-x86_64.zip
 .\scripts\Verify-Readiness.ps1 -Packaged
+```
+
+Optional publish helper for the Git branch + release tag flow:
+
+```powershell
+.\scripts\Publish-ReleaseTag.ps1 -Version v0.1.1
+```
+
+If you also want the script to stage and create the release-preparation commit first:
+
+```powershell
+.\scripts\Publish-ReleaseTag.ps1 -Version v0.1.1 -CommitMessage "Bump version to 0.1.1"
 ```
 
 Published release verification command:
 
 ```powershell
-.\scripts\Verify-PublishedRelease.ps1 -Version v0.1.0
+.\scripts\Verify-PublishedRelease.ps1 -Version v0.1.1
 ```
 
 Manual PowerShell checksum verification example:
 
 ```powershell
-$version = "v0.1.0"
+$version = "v0.1.1"
 $asset = "lingopilot-tts-piper-$version-windows-x86_64.zip"
 $checksum = "lingopilot-tts-piper-$version-sha256.txt"
 $baseUrl = "https://github.com/lingopilot-ai/lingopilot-tts-piper/releases/download/$version"
