@@ -46,6 +46,7 @@ $outputRoot = New-Item -ItemType Directory -Force -Path $OutputDir
 $packageRoot = Join-Path $outputRoot.FullName $assetBase
 $zipPath = Join-Path $outputRoot.FullName "$assetBase.zip"
 $checksumPath = Join-Path $outputRoot.FullName "lingopilot-tts-piper-$versionTag-sha256.txt"
+$sidecarPath = "$zipPath.sha256"
 
 if (Test-Path $packageRoot) {
     Remove-Item -LiteralPath $packageRoot -Recurse -Force
@@ -68,6 +69,8 @@ Compress-Archive -LiteralPath $packageRoot -DestinationPath $zipPath -Force
 $hash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
 $checksumLine = "{0}  {1}" -f $hash, (Split-Path -Leaf $zipPath)
 Set-Content -LiteralPath $checksumPath -Value $checksumLine -NoNewline
+Set-Content -LiteralPath $sidecarPath -Value $hash -NoNewline
 
 Write-Host "Created release archive: $zipPath" -ForegroundColor Green
 Write-Host "Created checksum manifest: $checksumPath" -ForegroundColor Green
+Write-Host "Created sidecar checksum: $sidecarPath" -ForegroundColor Green
