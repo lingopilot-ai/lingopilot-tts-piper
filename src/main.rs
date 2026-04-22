@@ -1,7 +1,6 @@
 mod protocol;
 mod synthesis;
 
-use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
@@ -16,11 +15,7 @@ use tracing_subscriber::registry::LookupSpan;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const ESPEAK_DATA_ENV: &str = "PIPER_ESPEAKNG_DATA_DIRECTORY";
-
-#[derive(Debug, PartialEq, Eq)]
-struct StartupConfig {
-    espeak_data_dir: PathBuf,
-}
+const ESPEAK_RUNTIME_DIR_NAME: &str = "espeak-runtime";
 
 struct ObservabilityFormatter;
 
@@ -110,18 +105,26 @@ fn main() -> ExitCode {
 
     tracing::info!(event = "startup", version = VERSION);
 
-    let startup = match load_startup_config(std::env::args_os()) {
-        Ok(config) => config,
+    if std::env::args_os().len() > 1 {
+        eprintln!(
+            "Startup error: this sidecar takes no arguments; it auto-discovers the eSpeak runtime \
+             next to the binary."
+        );
+        return ExitCode::FAILURE;
+    }
+
+    let espeak_data_dir = match discover_espeak_data_dir() {
+        Ok(dir) => dir,
         Err(message) => {
             eprintln!("Startup error: {}", message);
             return ExitCode::FAILURE;
         }
     };
 
-    std::env::set_var(ESPEAK_DATA_ENV, &startup.espeak_data_dir);
+    std::env::set_var(ESPEAK_DATA_ENV, &espeak_data_dir);
     tracing::info!(
         event = "espeak_runtime_selected",
-        espeak_data_dir = startup.espeak_data_dir.display().to_string()
+        espeak_data_dir = espeak_data_dir.display().to_string()
     );
 
     // Send ready signal
@@ -319,51 +322,22 @@ fn parse_request(line: &str) -> Result<TtsRequest, String> {
     Ok(request)
 }
 
-fn load_startup_config<I, S>(args: I) -> Result<StartupConfig, String>
-where
-    I: IntoIterator<Item = S>,
-    S: Into<OsString>,
-{
-    let config = parse_startup_config(args)?;
-    synthesis::validate_espeak_data_dir(&config.espeak_data_dir)?;
-    Ok(config)
+fn discover_espeak_data_dir() -> Result<PathBuf, String> {
+    let current_exe = std::env::current_exe()
+        .map_err(|error| format!("Cannot resolve current executable path: {}", error))?;
+    let binary_dir = current_exe.parent().ok_or_else(|| {
+        format!(
+            "Cannot resolve binary directory from '{}'",
+            current_exe.display()
+        )
+    })?;
+    let candidate = binary_dir.join(ESPEAK_RUNTIME_DIR_NAME);
+    discover_espeak_data_dir_in(&candidate)
 }
 
-fn parse_startup_config<I, S>(args: I) -> Result<StartupConfig, String>
-where
-    I: IntoIterator<Item = S>,
-    S: Into<OsString>,
-{
-    let mut args = args.into_iter().map(Into::into);
-    let _binary = args.next();
-
-    let mut espeak_data_dir: Option<PathBuf> = None;
-
-    while let Some(arg) = args.next() {
-        if arg == OsStr::new("--espeak-data-dir") {
-            if espeak_data_dir.is_some() {
-                return Err("Duplicate startup argument: --espeak-data-dir".to_string());
-            }
-
-            let Some(value) = args.next() else {
-                return Err("Missing value for --espeak-data-dir".to_string());
-            };
-
-            espeak_data_dir = Some(PathBuf::from(value));
-            continue;
-        }
-
-        return Err(format!(
-            "Unknown startup argument: {}",
-            arg.to_string_lossy()
-        ));
-    }
-
-    let Some(espeak_data_dir) = espeak_data_dir else {
-        return Err("Missing required startup argument: --espeak-data-dir <path>".to_string());
-    };
-
-    Ok(StartupConfig { espeak_data_dir })
+fn discover_espeak_data_dir_in(candidate: &Path) -> Result<PathBuf, String> {
+    synthesis::validate_espeak_data_dir(candidate)?;
+    Ok(candidate.to_path_buf())
 }
 
 /// Send a JSON response to stdout followed by a newline.
@@ -394,32 +368,47 @@ fn send_response(response: &TtsResponse, response_type: &'static str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_request, parse_startup_config, StartupConfig};
+    use super::{discover_espeak_data_dir_in, parse_request};
+    use std::fs;
     use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
-    #[test]
-    fn startup_config_requires_espeak_data_dir_flag() {
-        let error = parse_startup_config(["lingopilot-tts-piper"])
-            .expect_err("startup config should require the espeak flag");
-
-        assert!(error.contains("--espeak-data-dir"));
+    fn unique_temp_dir(prefix: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be after epoch")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "lingopilot-tts-piper-{prefix}-{}-{nonce}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&path).expect("temp dir should be created");
+        path
     }
 
     #[test]
-    fn startup_config_accepts_required_espeak_data_dir_flag() {
-        let config = parse_startup_config([
-            "lingopilot-tts-piper",
-            "--espeak-data-dir",
-            "C:\\runtime\\espeak-runtime",
-        ])
-        .expect("startup config should parse");
+    fn discover_espeak_data_dir_returns_candidate_when_runtime_layout_is_valid() {
+        let root = unique_temp_dir("discover-valid");
+        let candidate = root.join("espeak-runtime");
+        fs::create_dir_all(candidate.join("espeak-ng-data")).expect("runtime layout");
 
-        assert_eq!(
-            config,
-            StartupConfig {
-                espeak_data_dir: PathBuf::from("C:\\runtime\\espeak-runtime"),
-            }
-        );
+        let resolved = discover_espeak_data_dir_in(&candidate)
+            .expect("valid layout should resolve to the candidate path");
+        assert_eq!(resolved, candidate);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn discover_espeak_data_dir_rejects_missing_runtime() {
+        let root = unique_temp_dir("discover-missing");
+        let candidate = root.join("espeak-runtime");
+
+        let error = discover_espeak_data_dir_in(&candidate)
+            .expect_err("missing runtime should fail discovery");
+        assert!(error.contains("eSpeak"));
+
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

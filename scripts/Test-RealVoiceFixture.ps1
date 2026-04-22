@@ -1,6 +1,5 @@
 param(
     [string]$BinaryPath = (Join-Path (Join-Path $PSScriptRoot "..") "target\release\lingopilot-tts-piper.exe"),
-    [string]$EspeakDataDir = (Join-Path (Join-Path $PSScriptRoot "..") "target\release\espeak-runtime"),
     [string]$ModelDir = $env:PIPER_TTS_REAL_VOICE_DIR,
     [string]$VoiceId = $env:PIPER_TTS_REAL_VOICE_ID,
     [string]$OrtDylibPath = $env:ORT_DYLIB_PATH,
@@ -91,7 +90,6 @@ if ([string]::IsNullOrWhiteSpace($ModelDir) -or [string]::IsNullOrWhiteSpace($Vo
 }
 
 $resolvedBinaryPath = (Resolve-Path $BinaryPath).Path
-$resolvedEspeakDataDir = (Resolve-Path $EspeakDataDir).Path
 $resolvedModelDir = (Resolve-Path $ModelDir).Path
 $resolvedOrtDylibPath = $null
 
@@ -104,8 +102,6 @@ $process = $null
 try {
     $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
     $startInfo.FileName = $resolvedBinaryPath
-    $startInfo.ArgumentList.Add("--espeak-data-dir")
-    $startInfo.ArgumentList.Add($resolvedEspeakDataDir)
     $startInfo.UseShellExecute = $false
     $startInfo.RedirectStandardInput = $true
     $startInfo.RedirectStandardOutput = $true

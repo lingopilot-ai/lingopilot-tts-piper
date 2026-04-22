@@ -49,14 +49,15 @@ target/release/espeak-runtime/  (release build)
 ### 3. Start the sidecar
 
 ```powershell
-$EspeakDir = (Resolve-Path .\target\release\espeak-runtime).Path
-.\target\release\lingopilot-tts-piper.exe --espeak-data-dir $EspeakDir
+.\target\release\lingopilot-tts-piper.exe
 ```
+
+The sidecar takes no CLI arguments. At startup it auto-discovers the eSpeak runtime as `espeak-runtime/` next to the binary (the layout produced by the build and by the packaged release archive).
 
 On successful startup, the sidecar emits exactly one newline-delimited `ready` JSON object on `stdout`:
 
 ```json
-{"type":"ready","version":"0.1.2"}
+{"type":"ready","version":"0.1.3"}
 ```
 
 The `version` value comes from the package version at build time. If startup validation fails, the sidecar writes `Startup error: ...` to `stderr`, exits with a non-zero status, and emits no `ready` message.
@@ -72,17 +73,17 @@ Current release contract:
 - Checksum manifest: `lingopilot-tts-piper-v<version>-sha256.txt`
 - Download base: `https://github.com/lingopilot-ai/lingopilot-tts-piper/releases/download/v<version>/`
 
-Example URLs for `v0.1.2`:
+Example URLs for `v0.1.3`:
 
 ```text
-https://github.com/lingopilot-ai/lingopilot-tts-piper/releases/download/v0.1.2/lingopilot-tts-piper-v0.1.2-windows-x86_64.zip
-https://github.com/lingopilot-ai/lingopilot-tts-piper/releases/download/v0.1.2/lingopilot-tts-piper-v0.1.2-sha256.txt
+https://github.com/lingopilot-ai/lingopilot-tts-piper/releases/download/v0.1.3/lingopilot-tts-piper-v0.1.3-windows-x86_64.zip
+https://github.com/lingopilot-ai/lingopilot-tts-piper/releases/download/v0.1.3/lingopilot-tts-piper-v0.1.3-sha256.txt
 ```
 
 The Windows zip contains one top-level folder named after the asset:
 
 ```text
-lingopilot-tts-piper-v0.1.2-windows-x86_64/
+lingopilot-tts-piper-v0.1.3-windows-x86_64/
   lingopilot-tts-piper.exe
   espeak-runtime/
   README.md
@@ -102,33 +103,33 @@ Local Windows validation commands:
 
 ```powershell
 .\build_windows.ps1 -Release
-.\scripts\Package-WindowsRelease.ps1 -Version v0.1.2
-.\scripts\Test-WindowsReleaseArchive.ps1 -ZipPath .\dist\lingopilot-tts-piper-v0.1.2-windows-x86_64.zip
+.\scripts\Package-WindowsRelease.ps1 -Version v0.1.3
+.\scripts\Test-WindowsReleaseArchive.ps1 -ZipPath .\dist\lingopilot-tts-piper-v0.1.3-windows-x86_64.zip
 .\scripts\Verify-Readiness.ps1 -Packaged
 ```
 
 Optional publish helper for the Git branch + release tag flow:
 
 ```powershell
-.\scripts\Publish-ReleaseTag.ps1 -Version v0.1.2
+.\scripts\Publish-ReleaseTag.ps1 -Version v0.1.3
 ```
 
 If you also want the script to stage and create the release-preparation commit first:
 
 ```powershell
-.\scripts\Publish-ReleaseTag.ps1 -Version v0.1.2 -CommitMessage "Bump version to 0.1.2"
+.\scripts\Publish-ReleaseTag.ps1 -Version v0.1.3 -CommitMessage "Bump version to 0.1.2"
 ```
 
 Published release verification command:
 
 ```powershell
-.\scripts\Verify-PublishedRelease.ps1 -Version v0.1.2
+.\scripts\Verify-PublishedRelease.ps1 -Version v0.1.3
 ```
 
 Manual PowerShell checksum verification example:
 
 ```powershell
-$version = "v0.1.2"
+$version = "v0.1.3"
 $asset = "lingopilot-tts-piper-$version-windows-x86_64.zip"
 $checksum = "lingopilot-tts-piper-$version-sha256.txt"
 $baseUrl = "https://github.com/lingopilot-ai/lingopilot-tts-piper/releases/download/$version"
@@ -166,19 +167,19 @@ Host                          Sidecar
 
 ### Startup Contract
 
-Start the sidecar with:
+Start the sidecar with no arguments:
 
 ```text
-lingopilot-tts-piper --espeak-data-dir <absolute-path>
+lingopilot-tts-piper
 ```
 
 Rules:
 
-- `--espeak-data-dir` is required.
-- The path must be absolute.
-- The directory must exist and contain `espeak-ng-data/`.
-- The eSpeak runtime is process-scoped. To change it, start a new sidecar process.
-- Unknown, duplicate, or incomplete startup arguments fail startup before `ready`.
+- The sidecar takes no CLI arguments.
+- At startup it auto-discovers the eSpeak runtime as `espeak-runtime/` next to the binary executable.
+- The discovered directory must exist and contain `espeak-ng-data/`.
+- The eSpeak runtime is process-scoped. To change it, start a new sidecar process with a different on-disk layout.
+- Any unexpected startup argument fails startup before `ready`.
 
 If startup validation fails:
 
@@ -284,7 +285,7 @@ The stable contract is the response shape, the stream used, and the leading erro
 Example:
 
 ```text
-Startup error: Missing required startup argument: --espeak-data-dir <path>
+Startup error: this sidecar takes no arguments; it auto-discovers the eSpeak runtime next to the binary.
 ```
 
 ### Malformed JSON Requests
@@ -388,13 +389,10 @@ function Read-ExactBytes {
 }
 
 $sidecarPath = (Resolve-Path .\target\release\lingopilot-tts-piper.exe).Path
-$espeakDir = (Resolve-Path .\target\release\espeak-runtime).Path
 $voiceDir = (Resolve-Path .\voices\en_US-hfc_female-medium).Path
 
 $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
 $startInfo.FileName = $sidecarPath
-$startInfo.ArgumentList.Add("--espeak-data-dir")
-$startInfo.ArgumentList.Add($espeakDir)
 $startInfo.UseShellExecute = $false
 $startInfo.RedirectStandardInput = $true
 $startInfo.RedirectStandardOutput = $true
@@ -452,8 +450,6 @@ use std::process::{Command, Stdio};
 
 fn main() {
     let mut child = Command::new("./lingopilot-tts-piper")
-        .arg("--espeak-data-dir")
-        .arg("/path/to/espeak-runtime")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -614,17 +610,17 @@ $env:ORT_DYLIB_PATH = "$env:LOCALAPPDATA\LingoPilot\OnnxRuntime\1.20.0\onnxrunti
 
 .\scripts\Verify-Readiness.ps1 -RequireRealVoice
 .\build_windows.ps1 -Release -Locked
-.\scripts\Package-WindowsRelease.ps1 -Version v0.1.2
+.\scripts\Package-WindowsRelease.ps1 -Version v0.1.3
 .\scripts\Verify-Readiness.ps1 -Packaged -RequireRealVoice
-.\scripts\Publish-ReleaseTag.ps1 -Version v0.1.2
-.\scripts\Verify-PublishedRelease.ps1 -Version v0.1.2
+.\scripts\Publish-ReleaseTag.ps1 -Version v0.1.3
+.\scripts\Verify-PublishedRelease.ps1 -Version v0.1.3
 ```
 
 Interpretation:
 
 - `Verify-Readiness.ps1 -RequireRealVoice` proves the local tree passes deterministic and real-voice validation.
 - `Verify-Readiness.ps1 -Packaged -RequireRealVoice` keeps the same real-voice gate while also verifying the most recent packaged Windows archive.
-- `Publish-ReleaseTag.ps1` pushes the branch and the `v0.1.2` tag.
+- `Publish-ReleaseTag.ps1` pushes the branch and the `v0.1.3` tag.
 - `Verify-PublishedRelease.ps1` completes the downstream validation by checking the published GitHub asset and checksum from the release URL.
 
 ## Vendored `espeak-rs-sys`

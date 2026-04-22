@@ -45,11 +45,7 @@ impl SidecarHarness {
             command.env(LOG_ENV, level);
         }
 
-        let mut child = command
-            .arg("--espeak-data-dir")
-            .arg(built_espeak_runtime_dir())
-            .spawn()
-            .expect("sidecar should start");
+        let mut child = command.spawn().expect("sidecar should start");
 
         let stdout = child.stdout.take().expect("stdout should be piped");
         let stderr = child.stderr.take().expect("stderr should be piped");
@@ -173,13 +169,6 @@ impl Drop for TempDir {
     }
 }
 
-fn built_espeak_runtime_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_lingopilot-tts-piper"))
-        .parent()
-        .expect("binary should have a parent directory")
-        .join("espeak-runtime")
-}
-
 fn valid_semantic_request(model_dir: &Path) -> Value {
     valid_semantic_request_with_text(model_dir, "Hello from the new request contract")
 }
@@ -270,8 +259,9 @@ fn valid_startup_flag_emits_exactly_one_ready() {
 }
 
 #[test]
-fn missing_startup_flag_exits_without_ready() {
+fn unexpected_startup_argument_exits_without_ready() {
     let output = sidecar_command()
+        .arg("--unexpected-flag")
         .output()
         .expect("sidecar should run to completion");
 
@@ -282,26 +272,8 @@ fn missing_startup_flag_exits_without_ready() {
     );
 
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("Startup error: Missing required startup argument"));
-    assert_stderr_is_plain_text(&stderr);
-}
-
-#[test]
-fn invalid_startup_path_exits_without_ready() {
-    let output = sidecar_command()
-        .arg("--espeak-data-dir")
-        .arg(unique_missing_path("missing-espeak-startup"))
-        .output()
-        .expect("sidecar should run to completion");
-
-    assert!(!output.status.success());
-    assert!(
-        output.stdout.is_empty(),
-        "expected no ready output on stdout"
-    );
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("Startup error: Cannot use eSpeak data dir"));
+    assert!(stderr.contains("Startup error:"));
+    assert!(stderr.contains("no arguments"));
     assert_stderr_is_plain_text(&stderr);
 }
 
@@ -642,8 +614,7 @@ fn invalid_semantic_payload_returns_error_and_process_stays_alive() {
 #[test]
 fn process_can_restart_after_invalid_startup_and_then_emit_ready() {
     let invalid_output = sidecar_command()
-        .arg("--espeak-data-dir")
-        .arg(unique_missing_path("restart-invalid-espeak"))
+        .arg("--unexpected-flag")
         .output()
         .expect("invalid startup should complete");
     assert!(!invalid_output.status.success());
@@ -657,8 +628,6 @@ fn process_can_restart_after_invalid_startup_and_then_emit_ready() {
 fn startup_warn_logging_keeps_stdout_protocol_only_and_stderr_text_only() {
     let output = sidecar_command()
         .env(LOG_ENV, "warn")
-        .arg("--espeak-data-dir")
-        .arg(built_espeak_runtime_dir())
         .output()
         .expect("sidecar should run to completion");
 
@@ -681,8 +650,6 @@ fn startup_warn_logging_keeps_stdout_protocol_only_and_stderr_text_only() {
 fn startup_debug_logging_keeps_stdout_protocol_only_and_stderr_plain_text() {
     let output = sidecar_command()
         .env(LOG_ENV, "debug")
-        .arg("--espeak-data-dir")
-        .arg(built_espeak_runtime_dir())
         .output()
         .expect("sidecar should run to completion");
 

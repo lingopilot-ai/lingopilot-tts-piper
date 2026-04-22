@@ -10,7 +10,6 @@ $realVoiceDir = $env:PIPER_TTS_REAL_VOICE_DIR
 $realVoiceId = $env:PIPER_TTS_REAL_VOICE_ID
 $ortDylibPath = $env:ORT_DYLIB_PATH
 $debugBinaryPath = Join-Path $repoRoot "target\debug\lingopilot-tts-piper.exe"
-$debugEspeakDir = Join-Path $repoRoot "target\debug\espeak-runtime"
 
 Push-Location $repoRoot
 try {
@@ -40,7 +39,6 @@ try {
 
         .\scripts\Test-RealVoiceFixture.ps1 `
             -BinaryPath $debugBinaryPath `
-            -EspeakDataDir $debugEspeakDir `
             -ModelDir $realVoiceDir `
             -VoiceId $realVoiceId `
             -OrtDylibPath $ortDylibPath

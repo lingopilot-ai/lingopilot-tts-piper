@@ -33,8 +33,6 @@ try {
 
     $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
     $startInfo.FileName = $binaryPath
-    $startInfo.ArgumentList.Add("--espeak-data-dir")
-    $startInfo.ArgumentList.Add($runtimeDir)
     $startInfo.UseShellExecute = $false
     $startInfo.RedirectStandardInput = $true
     $startInfo.RedirectStandardOutput = $true
