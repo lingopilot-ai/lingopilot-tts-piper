@@ -13,6 +13,8 @@ Push-Location $PSScriptRoot
 try {
     . (Join-Path $PSScriptRoot "scripts\Set-WindowsBuildEnv.ps1")
 
+    & (Join-Path $PSScriptRoot "scripts\Assert-OrtPinParity.ps1")
+
     $cargoArgs = @("build")
     if ($Release) {
         Write-Host "Building release..." -ForegroundColor Cyan

@@ -1,15 +1,29 @@
 param(
     [Parameter(Mandatory = $true)]
     [string]$DestinationDir,
-    [string]$OrtVersion = "1.24.4",
     [switch]$Force
 )
 
-# ONNX Runtime alignment with Kokoro is a directive invariant: both TTS
-# sidecars track the same major.minor. Per the 2026-04-22c directive the
-# pinned major.minor is 1.24.x.
+# Downloads and stages `onnxruntime.dll` (plus `DirectML.dll` when present)
+# into $DestinationDir. The URL and SHA-256 come from `release-sources.toml`
+# at the repo root — this script hard-fails on any hash mismatch. The
+# parity check in `Assert-OrtPinParity.ps1` guarantees the pin stays aligned
+# with `lingopilot-tts-kokoro/release-sources.toml`.
 
 $ErrorActionPreference = "Stop"
+
+. (Join-Path $PSScriptRoot "ReleaseSources.Common.ps1")
+
+$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+$config = Get-ReleaseSourcesConfig -RepoRoot $repoRoot
+$section = $config['onnxruntime']
+
+if (-not $section -or [string]::IsNullOrWhiteSpace($section['url']) -or [string]::IsNullOrWhiteSpace($section['sha256'])) {
+    throw "release-sources.toml is missing [onnxruntime] url/sha256 entries at '$repoRoot\release-sources.toml'."
+}
+
+$archiveUrl = $section['url']
+$expectedSha256 = $section['sha256']
 
 New-Item -ItemType Directory -Force -Path $DestinationDir | Out-Null
 
@@ -19,15 +33,19 @@ if ((-not $Force) -and (Test-Path -LiteralPath $targetDll)) {
     return $targetDll
 }
 
-$archiveUrl = "https://github.com/microsoft/onnxruntime/releases/download/v$OrtVersion/onnxruntime-win-x64-$OrtVersion.zip"
+$archiveName = [System.IO.Path]::GetFileName(([System.Uri]$archiveUrl).AbsolutePath)
 $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("lingopilot-tts-piper-ort-" + [System.Guid]::NewGuid().ToString("N"))
-$archivePath = Join-Path $tempRoot "onnxruntime-win-x64-$OrtVersion.zip"
+$archivePath = Join-Path $tempRoot $archiveName
 $expandedPath = Join-Path $tempRoot "expanded"
 
 try {
     New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
     Write-Host "Downloading $archiveUrl"
     Invoke-WebRequest -Uri $archiveUrl -OutFile $archivePath
+
+    Assert-FileSha256 -Path $archivePath -Expected $expectedSha256 | Out-Null
+    Write-Host "Verified SHA-256 for $archiveName."
+
     Expand-Archive -LiteralPath $archivePath -DestinationPath $expandedPath -Force
 
     $ortRoot = Get-ChildItem -LiteralPath $expandedPath -Directory | Select-Object -First 1

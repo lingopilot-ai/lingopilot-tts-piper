@@ -36,51 +36,11 @@ function Install-OrtRuntime {
         [switch]$ForceDownload
     )
 
-    $ortVersion = "1.24.4"
-    $archiveUrl = "https://github.com/microsoft/onnxruntime/releases/download/v$ortVersion/onnxruntime-win-x64-$ortVersion.zip"
-    $onnxruntimeDll = Join-Path $DestinationDir "onnxruntime.dll"
-    $directMlDll = Join-Path $DestinationDir "DirectML.dll"
-
-    if ((-not $ForceDownload) -and (Test-Path -LiteralPath $onnxruntimeDll)) {
-        Write-Host "Using existing ONNX Runtime DLL: $onnxruntimeDll"
-        return $onnxruntimeDll
+    $installScript = Join-Path $PSScriptRoot "Install-OnnxRuntime.ps1"
+    if ($ForceDownload) {
+        return (& $installScript -DestinationDir $DestinationDir -Force)
     }
-
-    New-Item -ItemType Directory -Force -Path $DestinationDir | Out-Null
-
-    $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("lingopilot-tts-piper-ort-" + [System.Guid]::NewGuid().ToString("N"))
-    $archivePath = Join-Path $tempRoot "onnxruntime-win-x64-$ortVersion.zip"
-    $expandedPath = Join-Path $tempRoot "expanded"
-
-    try {
-        New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
-        Invoke-DownloadIfNeeded -Uri $archiveUrl -OutFile $archivePath -ForceDownload:$ForceDownload
-        Expand-Archive -LiteralPath $archivePath -DestinationPath $expandedPath -Force
-
-        $ortRoot = Get-ChildItem -LiteralPath $expandedPath -Directory | Select-Object -First 1
-        if (-not $ortRoot) {
-            throw "Failed to locate the extracted ONNX Runtime root."
-        }
-
-        $sourceOnnxruntimeDll = Join-Path $ortRoot.FullName "lib\onnxruntime.dll"
-        if (-not (Test-Path -LiteralPath $sourceOnnxruntimeDll)) {
-            throw "Failed to locate 'onnxruntime.dll' in the extracted ONNX Runtime archive."
-        }
-
-        Copy-Item -LiteralPath $sourceOnnxruntimeDll -Destination $onnxruntimeDll -Force
-
-        $sourceDirectMlDll = Join-Path $ortRoot.FullName "lib\DirectML.dll"
-        if (Test-Path -LiteralPath $sourceDirectMlDll) {
-            Copy-Item -LiteralPath $sourceDirectMlDll -Destination $directMlDll -Force
-        }
-
-        return $onnxruntimeDll
-    }
-    finally {
-        if (Test-Path -LiteralPath $tempRoot) {
-            Remove-Item -LiteralPath $tempRoot -Recurse -Force
-        }
-    }
+    return (& $installScript -DestinationDir $DestinationDir)
 }
 
 $canonicalFixtures = @{

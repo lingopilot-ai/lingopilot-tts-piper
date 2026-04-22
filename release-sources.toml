@@ -1,0 +1,33 @@
+# Public upstream URLs + SHA-256 checksums for the ONNX Runtime asset that
+# ships next to `lingopilot-tts-piper.exe`. This file is the canonical,
+# machine-enforced pin for the piper sidecar.
+#
+# Parity invariant: the `[onnxruntime*]` sections in this file MUST match the
+# equivalent sections in `lingopilot-tts-kokoro/release-sources.toml`.
+# `scripts/Assert-OrtPinParity.ps1` enforces this on every build and CI run —
+# any drift is a hard failure. Version bumps must land in both repos in
+# lockstep.
+#
+# Override a row locally by exporting the matching
+# `LINGOPILOT_TTS_PIPER_RELEASE_*_URL` environment variable; env overrides
+# bypass this file entirely. SHA-256 verification is mandatory when the URL
+# comes from this file.
+
+[onnxruntime]
+# Windows x86_64. Must match the API version the `ort` crate is built against
+# (`api-24` → ORT 1.24.x). 1.20.x DLLs only expose GetApi up to version 20 and
+# cause `ort::init_from` to stall.
+url = "https://github.com/microsoft/onnxruntime/releases/download/v1.24.4/onnxruntime-win-x64-1.24.4.zip"
+sha256 = "d2319fddfb6ea4db99ccc4b60c85c517bcd855721f5daa6a06d40d7cb2ee2357"
+
+[onnxruntime_linux_x64]
+# Reserved for future posix packaging parity with kokoro. The API version
+# constraint is identical (`api-24` → 1.24.x).
+url = "https://github.com/microsoft/onnxruntime/releases/download/v1.24.4/onnxruntime-linux-x64-1.24.4.tgz"
+sha256 = "3a211fbea252c1e66290658f1b735b772056149f28321e71c308942cdb54b747"
+
+[onnxruntime_macos_arm64]
+# Reserved for future posix packaging parity with kokoro. The API version
+# constraint is identical (`api-24` → 1.24.x).
+url = "https://github.com/microsoft/onnxruntime/releases/download/v1.24.4/onnxruntime-osx-arm64-1.24.4.tgz"
+sha256 = "93787795f47e1eee369182e43ed51b9e5da0878ab0346aecf4258979b8bba989"

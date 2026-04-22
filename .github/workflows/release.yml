@@ -24,6 +24,10 @@ jobs:
         shell: pwsh
         run: .\scripts\Assert-ReleaseTagMatchesVersion.ps1 -Tag "${{ github.ref_name }}"
 
+      - name: Assert ORT pin parity with kokoro
+        shell: pwsh
+        run: .\scripts\Assert-OrtPinParity.ps1
+
       - name: Build release binary
         shell: pwsh
         run: |
