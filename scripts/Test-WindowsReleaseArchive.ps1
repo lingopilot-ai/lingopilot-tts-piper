@@ -49,8 +49,22 @@ try {
     }
 
     $ready = $readyLine | ConvertFrom-Json
-    if ($ready.type -ne "ready") {
+    if ($ready.op -ne "ready") {
         throw "Smoke test failed: expected a ready response, got '$readyLine'."
+    }
+    foreach ($required in @("version", "sample_rate", "channels", "encoding", "ops")) {
+        if (-not ($ready.PSObject.Properties.Name -contains $required)) {
+            throw "Smoke test failed: ready line missing required field '$required'. Got '$readyLine'."
+        }
+    }
+    if ($ready.sample_rate -ne 22050 -or $ready.channels -ne 1 -or $ready.encoding -ne "pcm16le") {
+        throw "Smoke test failed: ready line values do not match directive. Got '$readyLine'."
+    }
+    $expectedOps = @("synthesize", "phonemize")
+    $actualOps = @($ready.ops)
+    if (($actualOps.Count -ne $expectedOps.Count) -or
+        ($actualOps[0] -ne $expectedOps[0]) -or ($actualOps[1] -ne $expectedOps[1])) {
+        throw "Smoke test failed: ready.ops must be ['synthesize','phonemize']. Got '$readyLine'."
     }
 
     $process.StandardInput.Close()

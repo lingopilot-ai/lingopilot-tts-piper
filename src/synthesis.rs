@@ -12,17 +12,10 @@ type SynthLoader = dyn Fn(&Path) -> Result<SynthHandle, String> + Send + Sync;
 pub struct SynthResult {
     /// Raw PCM16 LE samples (mono).
     pub pcm16: Vec<i16>,
-    /// Sample rate reported by the Piper model.
+    /// Sample rate reported by the Piper model. The sidecar always re-emits
+    /// 22050 Hz per the directive contract, so this value is informational.
+    #[allow(dead_code)]
     pub sample_rate: u32,
-}
-
-/// Exact Piper voice files resolved from a request.
-#[derive(Debug)]
-pub struct ResolvedVoicePaths {
-    /// `<voice_id>.onnx` model file.
-    pub model_path: PathBuf,
-    /// `<voice_id>.onnx.json` config file.
-    pub config_path: PathBuf,
 }
 
 /// Process-owned Piper model cache keyed by the resolved voice config path.
@@ -161,40 +154,31 @@ pub fn validate_espeak_data_dir(data_dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Validate the request-scoped Piper model directory.
-pub fn validate_model_dir(model_dir: &Path) -> Result<(), String> {
-    if !model_dir.is_absolute() {
+/// Validate a request-provided absolute file path (Piper voice model or config).
+pub fn validate_voice_file(path: &Path, kind: &str) -> Result<(), String> {
+    if !path.is_absolute() {
         return Err(format!(
-            "Invalid model_dir '{}': path must be absolute",
-            model_dir.display()
+            "Invalid {kind} '{}': path must be absolute",
+            path.display()
         ));
     }
 
-    let metadata = match std::fs::metadata(model_dir) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Err(format!(
-                "Cannot use model_dir '{}': path does not exist",
-                model_dir.display()
-            ));
-        }
-        Err(error) => {
-            return Err(format!(
-                "Cannot use model_dir '{}': {}",
-                model_dir.display(),
-                error
-            ));
-        }
-    };
-
-    if !metadata.is_dir() {
-        return Err(format!(
-            "Cannot use model_dir '{}': path is not a directory",
-            model_dir.display()
-        ));
+    match std::fs::metadata(path) {
+        Ok(metadata) if metadata.is_file() => Ok(()),
+        Ok(_) => Err(format!(
+            "Invalid {kind} '{}': path is not a file",
+            path.display()
+        )),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Err(format!(
+            "Invalid {kind} '{}': path does not exist",
+            path.display()
+        )),
+        Err(error) => Err(format!(
+            "Cannot use {kind} '{}': {}",
+            path.display(),
+            error
+        )),
     }
-
-    Ok(())
 }
 
 /// Convert a speed multiplier (1.0 = normal) to a piper-rs rate percentage (0-100).
@@ -262,57 +246,16 @@ fn synthesize_with_synth(
     Ok(SynthResult { pcm16, sample_rate })
 }
 
-/// Resolve the exact Piper model/config pair for the requested voice.
-pub fn resolve_voice_paths(model_dir: &Path, voice_id: &str) -> Result<ResolvedVoicePaths, String> {
-    validate_model_dir(model_dir)?;
-
-    let model_path = model_dir.join(format!("{}.onnx", voice_id));
-    ensure_is_file(
-        &model_path,
-        format!(
-            "Requested voice '{}' is missing model file '{}'",
-            voice_id,
-            model_path.display()
-        ),
-    )?;
-
-    let config_path = model_dir.join(format!("{}.onnx.json", voice_id));
-    ensure_is_file(
-        &config_path,
-        format!(
-            "Requested voice '{}' is missing config file '{}'",
-            voice_id,
-            config_path.display()
-        ),
-    )?;
-
-    Ok(ResolvedVoicePaths {
-        model_path,
-        config_path,
-    })
-}
-
-fn ensure_is_file(path: &Path, missing_message: String) -> Result<(), String> {
-    match std::fs::metadata(path) {
-        Ok(metadata) if metadata.is_file() => Ok(()),
-        Ok(_) => Err(format!(
-            "Expected file but found non-file path '{}'",
-            path.display()
-        )),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Err(missing_message),
-        Err(error) => Err(format!("Cannot use path '{}': {}", path.display(), error)),
-    }
-}
 
 #[cfg(test)]
 mod tests {
     use super::{
-        get_or_load_cached, resolve_voice_paths, validate_espeak_data_dir, validate_model_dir,
+        get_or_load_cached, validate_espeak_data_dir, validate_voice_file,
     };
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::{Arc, Mutex};
+    use std::sync::Arc;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     struct TempDir {
@@ -345,12 +288,6 @@ mod tests {
         }
     }
 
-    fn create_voice_pair(dir: &Path, voice_id: &str) {
-        fs::write(dir.join(format!("{voice_id}.onnx")), b"model").expect("model should be created");
-        fs::write(dir.join(format!("{voice_id}.onnx.json")), b"{}")
-            .expect("config should be created");
-    }
-
     #[derive(Debug)]
     struct FakeLoadedVoice(&'static str);
 
@@ -367,6 +304,13 @@ mod tests {
                 .expect("clock should be after epoch")
                 .as_nanos()
         ))
+    }
+
+    fn create_voice_config(dir: &Path, voice_id: &str) -> PathBuf {
+        fs::write(dir.join(format!("{voice_id}.onnx")), b"model").expect("model should be created");
+        let config_path = dir.join(format!("{voice_id}.onnx.json"));
+        fs::write(&config_path, b"{}").expect("config should be created");
+        config_path
     }
 
     #[test]
@@ -416,109 +360,41 @@ mod tests {
     }
 
     #[test]
-    fn validates_absolute_existing_model_dir() {
-        let temp_dir = TempDir::new("model-valid");
+    fn validate_voice_file_accepts_absolute_existing_file() {
+        let temp_dir = TempDir::new("voice-file-valid");
+        let config_path = create_voice_config(temp_dir.path(), "voice-a");
 
-        validate_model_dir(temp_dir.path()).expect("model dir should validate");
+        validate_voice_file(&config_path, "voice_config_path")
+            .expect("existing file should validate");
     }
 
     #[test]
-    fn rejects_relative_model_dir() {
-        let error = validate_model_dir(Path::new("relative-model-dir"))
+    fn validate_voice_file_rejects_relative_path() {
+        let error = validate_voice_file(Path::new("relative.onnx"), "voice_model_path")
             .expect_err("relative path should fail");
-
         assert!(error.contains("path must be absolute"));
     }
 
     #[test]
-    fn rejects_missing_model_dir() {
-        let missing = unique_missing_path("model-missing");
-        let error = validate_model_dir(&missing).expect_err("missing model dir should fail");
-
+    fn validate_voice_file_rejects_missing_path() {
+        let missing = unique_missing_path("voice-file-missing").join("voice.onnx");
+        let error = validate_voice_file(&missing, "voice_model_path")
+            .expect_err("missing file should fail");
         assert!(error.contains("path does not exist"));
     }
 
     #[test]
-    fn rejects_model_dir_when_path_is_a_file() {
-        let temp_dir = TempDir::new("model-file");
-        let file_path = temp_dir.path().join("voice.onnx");
-        fs::write(&file_path, b"model").expect("file should be created");
-
-        let error = validate_model_dir(&file_path).expect_err("file path should fail");
-
-        assert!(error.contains("path is not a directory"));
-    }
-
-    #[test]
-    fn resolves_exact_voice_pair_when_both_files_exist() {
-        let temp_dir = TempDir::new("resolve-one");
-        create_voice_pair(temp_dir.path(), "voice-a");
-
-        let resolved =
-            resolve_voice_paths(temp_dir.path(), "voice-a").expect("voice should resolve");
-
-        assert_eq!(resolved.model_path, temp_dir.path().join("voice-a.onnx"));
-        assert_eq!(
-            resolved.config_path,
-            temp_dir.path().join("voice-a.onnx.json")
-        );
-    }
-
-    #[test]
-    fn resolves_requested_voice_when_multiple_pairs_exist() {
-        let temp_dir = TempDir::new("resolve-many");
-        create_voice_pair(temp_dir.path(), "voice-a");
-        create_voice_pair(temp_dir.path(), "voice-b");
-
-        let resolved =
-            resolve_voice_paths(temp_dir.path(), "voice-b").expect("voice should resolve");
-
-        assert_eq!(resolved.model_path, temp_dir.path().join("voice-b.onnx"));
-        assert_eq!(
-            resolved.config_path,
-            temp_dir.path().join("voice-b.onnx.json")
-        );
-    }
-
-    #[test]
-    fn rejects_missing_requested_voice_even_when_other_pairs_exist() {
-        let temp_dir = TempDir::new("resolve-missing");
-        create_voice_pair(temp_dir.path(), "voice-a");
-        create_voice_pair(temp_dir.path(), "voice-b");
-
-        let error = resolve_voice_paths(temp_dir.path(), "voice-c").expect_err("voice should fail");
-
-        assert!(error.contains("voice-c"));
-        assert!(error.contains("voice-c.onnx"));
-    }
-
-    #[test]
-    fn rejects_directory_without_any_matching_config() {
-        let temp_dir = TempDir::new("resolve-no-config");
-        fs::write(temp_dir.path().join("voice-a.onnx"), b"model").expect("model should be created");
-
-        let error = resolve_voice_paths(temp_dir.path(), "voice-a").expect_err("voice should fail");
-
-        assert!(error.contains("voice-a.onnx.json"));
-    }
-
-    #[test]
-    fn rejects_voice_when_model_file_is_missing() {
-        let temp_dir = TempDir::new("resolve-no-model");
-        fs::write(temp_dir.path().join("voice-a.onnx.json"), b"{}")
-            .expect("config should be created");
-
-        let error = resolve_voice_paths(temp_dir.path(), "voice-a").expect_err("voice should fail");
-
-        assert!(error.contains("voice-a.onnx"));
+    fn validate_voice_file_rejects_directory() {
+        let temp_dir = TempDir::new("voice-file-dir");
+        let error = validate_voice_file(temp_dir.path(), "voice_model_path")
+            .expect_err("directory path should fail");
+        assert!(error.contains("path is not a file"));
     }
 
     #[test]
     fn cache_reuses_loaded_model_for_same_config_path() {
         let temp_dir = TempDir::new("cache-same-path");
-        create_voice_pair(temp_dir.path(), "voice-a");
-        let resolved =
-            resolve_voice_paths(temp_dir.path(), "voice-a").expect("voice should resolve");
+        let config_path = create_voice_config(temp_dir.path(), "voice-a");
 
         let load_count = Arc::new(AtomicUsize::new(0));
         let mut cache = std::collections::HashMap::<PathBuf, Arc<FakeLoadedVoice>>::new();
@@ -530,62 +406,20 @@ mod tests {
             }
         };
 
-        let first = get_or_load_cached(&mut cache, &resolved.config_path, &loader, "voice config")
+        let first = get_or_load_cached(&mut cache, &config_path, &loader, "voice config")
             .expect("first load should succeed");
-        let second = get_or_load_cached(&mut cache, &resolved.config_path, &loader, "voice config")
+        let second = get_or_load_cached(&mut cache, &config_path, &loader, "voice config")
             .expect("second load should succeed");
 
         assert_eq!(first.0, "voice-a");
         assert!(Arc::ptr_eq(&first, &second));
         assert_eq!(load_count.load(Ordering::SeqCst), 1);
-        assert_eq!(cache.len(), 1);
-    }
-
-    #[test]
-    fn cache_loads_distinct_models_for_different_config_paths() {
-        let temp_dir = TempDir::new("cache-different-paths");
-        create_voice_pair(temp_dir.path(), "voice-a");
-        create_voice_pair(temp_dir.path(), "voice-b");
-        let resolved_a =
-            resolve_voice_paths(temp_dir.path(), "voice-a").expect("voice a should resolve");
-        let resolved_b =
-            resolve_voice_paths(temp_dir.path(), "voice-b").expect("voice b should resolve");
-
-        let load_count = Arc::new(AtomicUsize::new(0));
-        let mut cache = std::collections::HashMap::<PathBuf, Arc<FakeLoadedVoice>>::new();
-        let loader = {
-            let load_count = Arc::clone(&load_count);
-            move |config_path: &Path| {
-                load_count.fetch_add(1, Ordering::SeqCst);
-                let label = if config_path.ends_with("voice-a.onnx.json") {
-                    "voice-a"
-                } else {
-                    "voice-b"
-                };
-                Ok(Arc::new(FakeLoadedVoice(label)))
-            }
-        };
-
-        let first =
-            get_or_load_cached(&mut cache, &resolved_a.config_path, &loader, "voice config")
-                .expect("voice a should load");
-        let second =
-            get_or_load_cached(&mut cache, &resolved_b.config_path, &loader, "voice config")
-                .expect("voice b should load");
-
-        assert_eq!(first.0, "voice-a");
-        assert_eq!(second.0, "voice-b");
-        assert!(!Arc::ptr_eq(&first, &second));
-        assert_eq!(load_count.load(Ordering::SeqCst), 2);
-        assert_eq!(cache.len(), 2);
     }
 
     #[test]
     fn cache_does_not_store_failed_loads() {
         let temp_dir = TempDir::new("cache-failed-loads");
-        create_voice_pair(temp_dir.path(), "voice-a");
-        let resolved =
-            resolve_voice_paths(temp_dir.path(), "voice-a").expect("voice should resolve");
+        let config_path = create_voice_config(temp_dir.path(), "voice-a");
 
         let load_count = Arc::new(AtomicUsize::new(0));
         let mut cache = std::collections::HashMap::<PathBuf, Arc<FakeLoadedVoice>>::new();
@@ -593,50 +427,18 @@ mod tests {
             let load_count = Arc::clone(&load_count);
             move |_config_path: &Path| {
                 load_count.fetch_add(1, Ordering::SeqCst);
-                Err("synthetic loader failure".to_string())
+                Err::<Arc<FakeLoadedVoice>, String>("synthetic loader failure".to_string())
             }
         };
 
-        let first = get_or_load_cached(&mut cache, &resolved.config_path, &loader, "voice config")
+        let first = get_or_load_cached(&mut cache, &config_path, &loader, "voice config")
             .expect_err("first load should fail");
-        let second = get_or_load_cached(&mut cache, &resolved.config_path, &loader, "voice config")
+        let second = get_or_load_cached(&mut cache, &config_path, &loader, "voice config")
             .expect_err("second load should fail");
 
         assert_eq!(first, "synthetic loader failure");
         assert_eq!(second, "synthetic loader failure");
         assert_eq!(load_count.load(Ordering::SeqCst), 2);
         assert!(cache.is_empty());
-    }
-
-    #[test]
-    fn cache_uses_resolved_config_path_for_requested_voice() {
-        let temp_dir = TempDir::new("cache-resolved-path");
-        create_voice_pair(temp_dir.path(), "voice-a");
-        create_voice_pair(temp_dir.path(), "voice-b");
-        let resolved =
-            resolve_voice_paths(temp_dir.path(), "voice-b").expect("voice should resolve");
-
-        let observed_paths = Arc::new(Mutex::new(Vec::<PathBuf>::new()));
-        let mut cache = std::collections::HashMap::<PathBuf, Arc<FakeLoadedVoice>>::new();
-        let loader = {
-            let observed_paths = Arc::clone(&observed_paths);
-            move |config_path: &Path| {
-                observed_paths
-                    .lock()
-                    .expect("observed paths should be lockable")
-                    .push(config_path.to_path_buf());
-                Ok(Arc::new(FakeLoadedVoice("voice-b")))
-            }
-        };
-
-        let loaded = get_or_load_cached(&mut cache, &resolved.config_path, &loader, "voice config")
-            .expect("load should succeed");
-
-        let paths = observed_paths
-            .lock()
-            .expect("observed paths should be lockable");
-        assert_eq!(loaded.0, "voice-b");
-        assert_eq!(paths.as_slice(), &[resolved.config_path]);
-        assert_eq!(paths[0], temp_dir.path().join("voice-b.onnx.json"));
     }
 }

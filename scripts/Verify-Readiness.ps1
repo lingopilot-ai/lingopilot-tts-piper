@@ -31,11 +31,7 @@ try {
             }
         }
 
-        cargo test --locked real_voice_fixture_allows_two_successive_audio_responses_when_configured -- --exact --nocapture
-
-        if ($IsWindows) {
-            cargo test --locked real_voice_fixture_supports_model_dir_with_space_and_non_ascii_when_configured -- --exact --nocapture
-        }
+        cargo test --locked synthesize_with_real_voice_emits_audio_payload_and_done_when_configured -- --exact --nocapture
 
         .\scripts\Test-RealVoiceFixture.ps1 `
             -BinaryPath $debugBinaryPath `

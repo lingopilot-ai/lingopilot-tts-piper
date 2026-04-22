@@ -141,20 +141,26 @@ $stdin = $process.StandardInput
 
 $readyLine = Read-LineBytes -Stream $stdout
 $ready = $readyLine | ConvertFrom-Json
-if ($ready.type -ne "ready") {
+if ($ready.op -ne "ready") {
     throw "Expected ready response, got: $readyLine"
 }
 Write-Host "Sidecar ready, version $($ready.version)"
 
 $wavFiles = @()
+$requestIndex = 0
 
 foreach ($voice in $voices) {
     $voiceDir = Join-Path $VoicesRoot $voice.Id
+    $modelPath  = Join-Path $voiceDir ("{0}.onnx" -f $voice.Id)
+    $configPath = Join-Path $voiceDir ("{0}.onnx.json" -f $voice.Id)
+    $requestIndex += 1
     $request = [ordered]@{
-        text      = $voice.Text
-        voice     = $voice.Id
-        speed     = 1.0
-        model_dir = $voiceDir
+        op                = "synthesize"
+        id                = "eight-lang-$requestIndex"
+        text              = $voice.Text
+        voice_model_path  = $modelPath
+        voice_config_path = $configPath
+        speed             = 1.0
     } | ConvertTo-Json -Compress
 
     Write-Host ""
@@ -165,16 +171,23 @@ foreach ($voice in $voices) {
 
     $responseLine = Read-LineBytes -Stream $stdout
     $response = $responseLine | ConvertFrom-Json
-    if ($response.type -ne "audio") {
+    if ($response.op -ne "audio") {
         Write-Warning "Failed to synthesize $($voice.Language): $responseLine"
         continue
     }
 
-    $pcm = Read-ExactBytes -Stream $stdout -Count ([int]$response.byte_length)
+    $pcm = Read-ExactBytes -Stream $stdout -Count ([int]$response.bytes)
+
+    $doneLine = Read-LineBytes -Stream $stdout
+    $done = $doneLine | ConvertFrom-Json
+    if ($done.op -ne "done") {
+        Write-Warning "Expected done envelope, got: $doneLine"
+    }
+
     $wavPath = Join-Path $OutputDir ("{0:d2}-{1}.wav" -f ($wavFiles.Count + 1), $voice.Language)
     Write-WavFile -Path $wavPath -Pcm $pcm -SampleRate ([int]$response.sample_rate)
-    $wavFiles += [pscustomobject]@{ Language = $voice.Language; Path = $wavPath; SampleRate = $response.sample_rate; Bytes = $response.byte_length }
-    Write-Host "  -> $wavPath  ($($response.byte_length) bytes @ $($response.sample_rate) Hz)"
+    $wavFiles += [pscustomobject]@{ Language = $voice.Language; Path = $wavPath; SampleRate = $response.sample_rate; Bytes = $response.bytes }
+    Write-Host "  -> $wavPath  ($($response.bytes) bytes @ $($response.sample_rate) Hz)"
 }
 
 $stdin.Close()

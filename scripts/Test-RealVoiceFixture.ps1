@@ -61,7 +61,7 @@ function Read-AudioResponse {
     $headerLine = Read-LineBytes -Stream $StdoutStream
     $header = $headerLine | ConvertFrom-Json
 
-    if ($header.type -ne "audio") {
+    if ($header.op -ne "audio") {
         throw "Expected an audio response, got '$headerLine'."
     }
 
@@ -73,13 +73,13 @@ function Read-AudioResponse {
         throw "Expected a positive sample_rate, got $($header.sample_rate)."
     }
 
-    if ([int]$header.byte_length -le 0) {
-        throw "Expected a positive byte_length, got $($header.byte_length)."
+    if ([int]$header.bytes -le 0) {
+        throw "Expected a positive bytes, got $($header.bytes)."
     }
 
-    $payload = Read-ExactBytes -Stream $StdoutStream -Count ([int]$header.byte_length)
-    if ($payload.Length -ne [int]$header.byte_length) {
-        throw "PCM payload length mismatch: expected $($header.byte_length) bytes, got $($payload.Length)."
+    $payload = Read-ExactBytes -Stream $StdoutStream -Count ([int]$header.bytes)
+    if ($payload.Length -ne [int]$header.bytes) {
+        throw "PCM payload length mismatch: expected $($header.bytes) bytes, got $($payload.Length)."
     }
 
     return $header
@@ -118,25 +118,38 @@ try {
     $stdoutStream = $process.StandardOutput.BaseStream
     $readyLine = Read-LineBytes -Stream $stdoutStream
     $ready = $readyLine | ConvertFrom-Json
-    if ($ready.type -ne "ready") {
+    if ($ready.op -ne "ready") {
         throw "Expected a ready response, got '$readyLine'."
     }
 
+    $modelPath  = Join-Path $resolvedModelDir ("{0}.onnx" -f $VoiceId)
+    $configPath = Join-Path $resolvedModelDir ("{0}.onnx.json" -f $VoiceId)
+
+    $index = 0
     foreach ($requestText in @(
         "$Text one.",
         "$Text two."
     )) {
+        $index += 1
         $request = @{
-            text = $requestText
-            voice = $VoiceId
-            speed = 1.0
-            model_dir = $resolvedModelDir
+            op                 = "synthesize"
+            id                 = "real-$index"
+            text               = $requestText
+            voice_model_path   = $modelPath
+            voice_config_path  = $configPath
+            speed              = 1.0
         } | ConvertTo-Json -Compress
 
         $process.StandardInput.WriteLine($request)
         $process.StandardInput.Flush()
 
         $null = Read-AudioResponse -StdoutStream $stdoutStream
+
+        $doneLine = Read-LineBytes -Stream $stdoutStream
+        $done = $doneLine | ConvertFrom-Json
+        if ($done.op -ne "done") {
+            throw "Expected a done envelope after audio payload, got '$doneLine'."
+        }
     }
 
     $process.StandardInput.Close()

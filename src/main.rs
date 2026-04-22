@@ -1,3 +1,4 @@
+mod phonemize;
 mod protocol;
 mod synthesis;
 
@@ -6,7 +7,10 @@ use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use protocol::{TtsRequest, TtsResponse};
+use protocol::{
+    PhonemizeRequest, SidecarRequest, SidecarResponse, SynthesizeRequest, CHANNELS, ENCODING,
+    SAMPLE_RATE_HZ, SUPPORTED_OPS,
+};
 use tracing::field::{Field, Visit};
 use tracing::{Event, Subscriber};
 use tracing_subscriber::fmt::format::Writer as FormatWriter;
@@ -34,23 +38,18 @@ impl Visit for KeyValueVisitor {
     fn record_str(&mut self, field: &Field, value: &str) {
         self.push(field.name(), format_string_value(value));
     }
-
     fn record_bool(&mut self, field: &Field, value: bool) {
         self.push(field.name(), value.to_string());
     }
-
     fn record_i64(&mut self, field: &Field, value: i64) {
         self.push(field.name(), value.to_string());
     }
-
     fn record_u64(&mut self, field: &Field, value: u64) {
         self.push(field.name(), value.to_string());
     }
-
     fn record_f64(&mut self, field: &Field, value: f64) {
         self.push(field.name(), value.to_string());
     }
-
     fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
         self.push(field.name(), format!("{value:?}"));
     }
@@ -69,7 +68,6 @@ where
     ) -> fmt::Result {
         let mut visitor = KeyValueVisitor::default();
         event.record(&mut visitor);
-
         write!(writer, "level={}", event.metadata().level())?;
         for field in visitor.fields {
             write!(writer, " {field}")?;
@@ -90,7 +88,6 @@ fn format_string_value(value: &str) -> String {
 }
 
 fn main() -> ExitCode {
-    // Initialize tracing (respects PIPER_TTS_LOG or RUST_LOG env vars)
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_env("PIPER_TTS_LOG").unwrap_or_else(|_| {
@@ -127,19 +124,12 @@ fn main() -> ExitCode {
         espeak_data_dir = espeak_data_dir.display().to_string()
     );
 
-    // Send ready signal
-    if !send_response(
-        &TtsResponse::Ready {
-            version: VERSION.to_string(),
-        },
-        "ready",
-    ) {
+    if !emit_ready() {
         return ExitCode::FAILURE;
     }
 
     let mut synthesis_cache = synthesis::SynthesisCache::new();
 
-    // Main loop: read JSON requests from stdin, one per line
     let stdin = io::stdin();
     for line in stdin.lock().lines() {
         let line = match line {
@@ -155,108 +145,98 @@ fn main() -> ExitCode {
             continue;
         }
 
-        let request: TtsRequest = match parse_request(&line) {
-            Ok(r) => r,
-            Err(message) => {
-                let category = if message.starts_with("Invalid JSON request:") {
-                    "invalid_json"
-                } else {
-                    "invalid_request_payload"
-                };
+        match parse_request(&line) {
+            Ok(request) => handle_request(&mut synthesis_cache, request),
+            Err((id, kind, message)) => {
                 tracing::warn!(
                     event = "request_rejected",
-                    category,
+                    kind = kind,
                     line_len = line.chars().count(),
                     detail = message.as_str()
                 );
-                let _ = send_response(&TtsResponse::Error { message }, "error");
-                continue;
+                send_error(id.as_deref(), kind, &message);
             }
-        };
-
-        handle_request(&mut synthesis_cache, request);
+        }
     }
 
     tracing::info!(event = "stdin_closed");
     ExitCode::SUCCESS
 }
 
-fn handle_request(synthesis_cache: &mut synthesis::SynthesisCache, req: TtsRequest) {
+fn emit_ready() -> bool {
+    let ops: &[&str] = &SUPPORTED_OPS;
+    send_response(&SidecarResponse::Ready {
+        version: VERSION,
+        sample_rate: SAMPLE_RATE_HZ,
+        channels: CHANNELS,
+        encoding: ENCODING,
+        ops,
+    })
+}
+
+fn parse_request(line: &str) -> Result<SidecarRequest, (Option<String>, &'static str, String)> {
+    let id = extract_id_from_raw(line);
+    let request: SidecarRequest = serde_json::from_str(line).map_err(|error| {
+        (
+            id.clone(),
+            "bad_request",
+            format!("Invalid request: {}", error),
+        )
+    })?;
+    request
+        .validate()
+        .map_err(|error| (Some(request.id().to_string()), "bad_request", error))?;
+    Ok(request)
+}
+
+fn extract_id_from_raw(line: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(line).ok()?;
+    value.get("id")?.as_str().map(|s| s.to_string())
+}
+
+fn handle_request(cache: &mut synthesis::SynthesisCache, request: SidecarRequest) {
+    match request {
+        SidecarRequest::Synthesize(r) => handle_synthesize(cache, r),
+        SidecarRequest::Phonemize(r) => handle_phonemize(r),
+    }
+}
+
+fn handle_synthesize(cache: &mut synthesis::SynthesisCache, req: SynthesizeRequest) {
     let text_len = req.text.chars().count();
     tracing::debug!(
         event = "request_received",
-        voice = req.voice.as_str(),
+        op = "synthesize",
+        id = req.id.as_str(),
         speed = req.speed as f64,
         text_len
     );
 
-    // Resolve the requested voice files before initializing eSpeak so the
-    // host gets a deterministic missing-voice error when the model is wrong.
-    let model_dir = Path::new(&req.model_dir);
-    if let Err(message) = synthesis::validate_model_dir(model_dir) {
-        tracing::warn!(
-            event = "request_rejected",
-            category = "invalid_request_payload",
-            voice = req.voice.as_str(),
-            speed = req.speed as f64,
-            text_len,
-            detail = message.as_str()
-        );
-        let _ = send_response(
-            &TtsResponse::Error {
-                message: format!("Invalid request payload: {}", message),
-            },
-            "error",
-        );
+    let model_path = Path::new(&req.voice_model_path);
+    if let Err(message) = synthesis::validate_voice_file(model_path, "voice_model_path") {
+        send_error(Some(&req.id), "voice_not_found", &message);
+        return;
+    }
+    let config_path = Path::new(&req.voice_config_path);
+    if let Err(message) = synthesis::validate_voice_file(config_path, "voice_config_path") {
+        send_error(Some(&req.id), "voice_not_found", &message);
         return;
     }
 
-    let voice_paths = match synthesis::resolve_voice_paths(model_dir, &req.voice) {
-        Ok(paths) => paths,
-        Err(e) => {
-            tracing::warn!(
-                event = "request_rejected",
-                category = "invalid_request_payload",
-                voice = req.voice.as_str(),
-                speed = req.speed as f64,
-                text_len,
-                detail = e.as_str()
-            );
-            let _ = send_response(
-                &TtsResponse::Error {
-                    message: format!("Invalid request payload: {}", e),
-                },
-                "error",
-            );
-            return;
-        }
-    };
-    tracing::debug!(
-        event = "voice_resolved",
-        voice = req.voice.as_str(),
-        model_path = voice_paths.model_path.display().to_string(),
-        config_path = voice_paths.config_path.display().to_string()
-    );
+    let speed = req.clamped_speed();
 
-    // Synthesize
-    match synthesis_cache.synthesize(&req.text, &voice_paths.config_path, req.speed) {
+    match cache.synthesize(&req.text, config_path, speed) {
         Ok(result) => {
-            // Convert i16 samples to bytes (PCM16 LE)
             let byte_len = (result.pcm16.len() * 2) as u32;
 
-            // Send JSON header
-            if !send_response(
-                &TtsResponse::Audio {
-                    byte_length: byte_len,
-                    sample_rate: result.sample_rate,
-                    channels: 1,
-                },
-                "audio",
-            ) {
+            if !send_response(&SidecarResponse::Audio {
+                id: &req.id,
+                bytes: byte_len,
+                sample_rate: SAMPLE_RATE_HZ,
+                channels: CHANNELS,
+            }) {
                 return;
             }
 
-            // Send raw PCM bytes immediately after
             let stdout = io::stdout();
             let mut out = stdout.lock();
             for sample in &result.pcm16 {
@@ -278,48 +258,69 @@ fn handle_request(synthesis_cache: &mut synthesis::SynthesisCache, req: TtsReque
                 );
                 return;
             }
+
+            let _ = send_response(&SidecarResponse::Done { id: &req.id });
             tracing::debug!(
                 event = "request_succeeded",
-                voice = req.voice.as_str(),
-                speed = req.speed as f64,
+                op = "synthesize",
+                id = req.id.as_str(),
                 text_len,
-                sample_rate = result.sample_rate as u64,
                 byte_length = byte_len as u64
             );
         }
         Err(e) => {
             tracing::warn!(
                 event = "request_failed",
-                category = "synthesis_failed",
-                voice = req.voice.as_str(),
-                speed = req.speed as f64,
+                op = "synthesize",
+                id = req.id.as_str(),
                 text_len,
                 detail = e.as_str()
             );
-            let _ = send_response(
-                &TtsResponse::Error {
-                    message: format!("Synthesis failed: {}", e),
-                },
-                "error",
-            );
+            send_error(Some(&req.id), "synthesis_failed", &e);
         }
     }
 }
 
-fn parse_request(line: &str) -> Result<TtsRequest, String> {
-    let request: TtsRequest = serde_json::from_str(line).map_err(|error| {
-        if error.is_syntax() || error.is_eof() {
-            format!("Invalid JSON request: {}", error)
-        } else {
-            format!("Invalid request payload: {}", error)
+fn handle_phonemize(req: PhonemizeRequest) {
+    tracing::debug!(
+        event = "request_received",
+        op = "phonemize",
+        id = req.id.as_str(),
+        language = req.language.as_str(),
+        text_len = req.text.chars().count()
+    );
+
+    match phonemize::phonemize(&req.text, &req.language) {
+        Ok(phonemes) => {
+            let _ = send_response(&SidecarResponse::Phonemes {
+                id: &req.id,
+                phonemes: &phonemes,
+            });
+            tracing::debug!(
+                event = "request_succeeded",
+                op = "phonemize",
+                id = req.id.as_str(),
+                phoneme_len = phonemes.chars().count()
+            );
         }
-    })?;
+        Err(message) => {
+            tracing::warn!(
+                event = "request_failed",
+                op = "phonemize",
+                id = req.id.as_str(),
+                detail = message.as_str()
+            );
+            send_error(Some(&req.id), "phonemize_failed", &message);
+        }
+    }
+}
 
-    request
-        .validate()
-        .map_err(|error| format!("Invalid request payload: {}", error))?;
-
-    Ok(request)
+fn send_error(id: Option<&str>, kind: &str, message: &str) {
+    let _ = send_response(&SidecarResponse::Error {
+        id,
+        kind,
+        message,
+    });
 }
 
 fn discover_espeak_data_dir() -> Result<PathBuf, String> {
@@ -340,8 +341,7 @@ fn discover_espeak_data_dir_in(candidate: &Path) -> Result<PathBuf, String> {
     Ok(candidate.to_path_buf())
 }
 
-/// Send a JSON response to stdout followed by a newline.
-fn send_response(response: &TtsResponse, response_type: &'static str) -> bool {
+fn send_response(response: &SidecarResponse<'_>) -> bool {
     let stdout = io::stdout();
     let mut out = stdout.lock();
     let json = serde_json::to_string(response).expect("Failed to serialize response");
@@ -349,7 +349,6 @@ fn send_response(response: &TtsResponse, response_type: &'static str) -> bool {
         tracing::error!(
             event = "stdout_write_failed",
             stage = "response",
-            response_type,
             error = error.to_string()
         );
         return false;
@@ -358,7 +357,6 @@ fn send_response(response: &TtsResponse, response_type: &'static str) -> bool {
         tracing::error!(
             event = "stdout_flush_failed",
             stage = "response",
-            response_type,
             error = error.to_string()
         );
         return false;
@@ -412,18 +410,26 @@ mod tests {
     }
 
     #[test]
-    fn parse_request_rejects_semantically_invalid_payload_as_invalid_request_payload() {
-        let error = parse_request(
-            r#"{
-                "text":"   ",
-                "voice":"en_US-hfc_female-medium",
-                "speed":1.0,
-                "model_dir":"C:\\voices\\en_US-hfc_female-medium"
-            }"#,
-        )
-        .expect_err("invalid semantic payload should fail");
+    fn parse_request_rejects_malformed_json_with_bad_request_kind() {
+        let (_id, kind, message) = parse_request(r#"{"op":"synthesize"#)
+            .expect_err("malformed JSON should fail");
+        assert_eq!(kind, "bad_request");
+        assert!(message.starts_with("Invalid request:"));
+    }
 
-        assert!(error.starts_with("Invalid request payload:"));
-        assert!(error.contains("text must not be empty or whitespace"));
+    #[test]
+    fn parse_request_rejects_unknown_op() {
+        let (_id, kind, _message) = parse_request(r#"{"op":"cancel","id":"r1"}"#)
+            .expect_err("cancel is not supported");
+        assert_eq!(kind, "bad_request");
+    }
+
+    #[test]
+    fn parse_request_extracts_id_from_semantically_invalid_payload() {
+        let (id, kind, _message) =
+            parse_request(r#"{"op":"synthesize","id":"req-42","text":"","voice_model_path":"a","voice_config_path":"b"}"#)
+                .expect_err("empty text should fail validation");
+        assert_eq!(id.as_deref(), Some("req-42"));
+        assert_eq!(kind, "bad_request");
     }
 }

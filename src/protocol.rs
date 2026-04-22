@@ -1,271 +1,300 @@
 use serde::{Deserialize, Serialize};
 
-const MAX_TEXT_CHARS: usize = 8192;
-const MIN_SPEED: f32 = 0.5;
-const MAX_SPEED: f32 = 5.5;
+pub const SAMPLE_RATE_HZ: u32 = 22050;
+pub const CHANNELS: u16 = 1;
+pub const ENCODING: &str = "pcm16le";
+pub const SUPPORTED_OPS: [&str; 2] = ["synthesize", "phonemize"];
 
-/// Request sent by the host process via stdin (one JSON object per line).
+const MAX_TEXT_CHARS: usize = 8192;
+const MAX_ID_BYTES: usize = 128;
+const MIN_SPEED: f32 = 0.5;
+const MAX_SPEED: f32 = 2.0;
+
+/// Request received on stdin, discriminated by the `op` field.
+#[derive(Debug, Deserialize)]
+#[serde(tag = "op", deny_unknown_fields)]
+pub enum SidecarRequest {
+    #[serde(rename = "synthesize")]
+    Synthesize(SynthesizeRequest),
+    #[serde(rename = "phonemize")]
+    Phonemize(PhonemizeRequest),
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct TtsRequest {
-    /// Text to synthesize.
+pub struct SynthesizeRequest {
+    pub id: String,
     pub text: String,
-
-    /// Piper voice ID (e.g. "en_US-hfc_female-medium").
-    pub voice: String,
-
-    /// Playback speed multiplier (1.0 = normal).
+    pub voice_model_path: String,
+    pub voice_config_path: String,
+    #[allow(dead_code)]
+    #[serde(default)]
+    pub speaker_id: i64,
     #[serde(default = "default_speed")]
     pub speed: f32,
+}
 
-    /// Piper model directory path (absolute).
-    pub model_dir: String,
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PhonemizeRequest {
+    pub id: String,
+    pub text: String,
+    pub language: String,
 }
 
 fn default_speed() -> f32 {
     1.0
 }
 
-impl TtsRequest {
-    /// Validate request semantics after JSON deserialization succeeds.
+impl SidecarRequest {
+    pub fn id(&self) -> &str {
+        match self {
+            SidecarRequest::Synthesize(r) => &r.id,
+            SidecarRequest::Phonemize(r) => &r.id,
+        }
+    }
+
     pub fn validate(&self) -> Result<(), String> {
-        if self.text.trim().is_empty() {
-            return Err("Invalid text: text must not be empty or whitespace".to_string());
+        match self {
+            SidecarRequest::Synthesize(r) => r.validate(),
+            SidecarRequest::Phonemize(r) => r.validate(),
         }
+    }
+}
 
-        if self.voice.trim().is_empty() {
-            return Err("voice must not be empty or whitespace".to_string());
+fn validate_id(id: &str) -> Result<(), String> {
+    if id.is_empty() {
+        return Err("id must not be empty".to_string());
+    }
+    if id.len() > MAX_ID_BYTES {
+        return Err(format!("id must be at most {MAX_ID_BYTES} bytes"));
+    }
+    Ok(())
+}
+
+fn validate_text(text: &str) -> Result<(), String> {
+    if text.trim().is_empty() {
+        return Err("text must not be empty or whitespace".to_string());
+    }
+    if text.chars().count() > MAX_TEXT_CHARS {
+        return Err(format!("text must be at most {MAX_TEXT_CHARS} characters"));
+    }
+    Ok(())
+}
+
+impl SynthesizeRequest {
+    pub fn validate(&self) -> Result<(), String> {
+        validate_id(&self.id)?;
+        validate_text(&self.text)?;
+        if self.voice_model_path.trim().is_empty() {
+            return Err("voice_model_path must not be empty or whitespace".to_string());
         }
-
-        if self.model_dir.trim().is_empty() {
-            return Err("model_dir must not be empty or whitespace".to_string());
+        if self.voice_config_path.trim().is_empty() {
+            return Err("voice_config_path must not be empty or whitespace".to_string());
         }
-
-        if self.text.chars().count() > MAX_TEXT_CHARS {
-            return Err(format!(
-                "Invalid text: text must be at most {MAX_TEXT_CHARS} characters"
-            ));
+        if !self.speed.is_finite() {
+            return Err("speed must be a finite number".to_string());
         }
+        Ok(())
+    }
 
-        if !self.speed.is_finite() || !(MIN_SPEED..=MAX_SPEED).contains(&self.speed) {
-            return Err(format!(
-                "Invalid speed: speed must be a finite number between {MIN_SPEED} and {MAX_SPEED}"
-            ));
+    /// Speed clamped to the directive range [0.5, 2.0].
+    pub fn clamped_speed(&self) -> f32 {
+        self.speed.clamp(MIN_SPEED, MAX_SPEED)
+    }
+}
+
+impl PhonemizeRequest {
+    pub fn validate(&self) -> Result<(), String> {
+        validate_id(&self.id)?;
+        validate_text(&self.text)?;
+        if self.language.trim().is_empty() {
+            return Err("language must not be empty or whitespace".to_string());
         }
-
         Ok(())
     }
 }
 
-/// Response sent back to the host process via stdout.
+/// Response emitted on stdout, discriminated by the `op` field.
 #[derive(Debug, Serialize)]
-#[serde(tag = "type")]
-pub enum TtsResponse {
-    /// Successful synthesis — audio follows as binary after this JSON line.
-    #[serde(rename = "audio")]
-    Audio {
-        /// Number of PCM16 LE bytes that follow on stdout after the newline.
-        byte_length: u32,
-        /// Sample rate of the audio (e.g. 22050).
-        sample_rate: u32,
-        /// Number of audio channels (always 1 — mono).
-        channels: u16,
-    },
-
-    /// An error occurred during synthesis.
-    #[serde(rename = "error")]
-    Error {
-        /// Human-readable error message.
-        message: String,
-    },
-
-    /// Sidecar is ready to accept requests.
+#[serde(tag = "op")]
+pub enum SidecarResponse<'a> {
     #[serde(rename = "ready")]
     Ready {
-        /// Sidecar version string.
-        version: String,
+        version: &'a str,
+        sample_rate: u32,
+        channels: u16,
+        encoding: &'a str,
+        ops: &'a [&'a str],
+    },
+    #[serde(rename = "audio")]
+    Audio {
+        id: &'a str,
+        bytes: u32,
+        sample_rate: u32,
+        channels: u16,
+    },
+    #[serde(rename = "done")]
+    Done { id: &'a str },
+    #[serde(rename = "phonemes")]
+    Phonemes { id: &'a str, phonemes: &'a str },
+    #[serde(rename = "error")]
+    Error {
+        id: Option<&'a str>,
+        kind: &'a str,
+        message: &'a str,
     },
 }
 
 #[cfg(test)]
 mod tests {
-    use super::TtsRequest;
+    use super::*;
 
-    fn parse_request_with_fields(
-        text: &str,
-        voice: &str,
-        speed: f32,
-        model_dir: &str,
-    ) -> TtsRequest {
-        serde_json::from_value(serde_json::json!({
-            "text": text,
-            "voice": voice,
-            "speed": speed,
-            "model_dir": model_dir,
-        }))
-        .expect("request should deserialize")
-    }
-
-    fn parse_request(text: &str, speed: f32) -> TtsRequest {
-        parse_request_with_fields(
-            text,
-            "en_US-hfc_female-medium",
-            speed,
-            "C:\\voices\\en_US-hfc_female-medium",
-        )
+    #[test]
+    fn ready_response_matches_directive_line() {
+        let ops: &[&str] = &SUPPORTED_OPS;
+        let response = SidecarResponse::Ready {
+            version: "0.1.4",
+            sample_rate: SAMPLE_RATE_HZ,
+            channels: CHANNELS,
+            encoding: ENCODING,
+            ops,
+        };
+        let json = serde_json::to_string(&response).expect("should serialize");
+        assert_eq!(
+            json,
+            r#"{"op":"ready","version":"0.1.4","sample_rate":22050,"channels":1,"encoding":"pcm16le","ops":["synthesize","phonemize"]}"#
+        );
     }
 
     #[test]
-    fn request_deserializes_without_legacy_espeak_field() {
-        let request = r#"{
-            "text":"Hello",
-            "voice":"en_US-hfc_female-medium",
-            "speed":1.0,
-            "model_dir":"C:\\voices\\en_US-hfc_female-medium"
-        }"#;
-
-        let parsed: TtsRequest = serde_json::from_str(request).expect("request should deserialize");
-
-        assert_eq!(parsed.text, "Hello");
-        assert_eq!(parsed.voice, "en_US-hfc_female-medium");
-        assert_eq!(parsed.speed, 1.0);
+    fn synthesize_request_deserializes_with_defaults() {
+        let request = r#"{"op":"synthesize","id":"r1","text":"Hi","voice_model_path":"C:/v/x.onnx","voice_config_path":"C:/v/x.onnx.json"}"#;
+        let parsed: SidecarRequest =
+            serde_json::from_str(request).expect("synthesize should parse");
+        match parsed {
+            SidecarRequest::Synthesize(r) => {
+                assert_eq!(r.id, "r1");
+                assert_eq!(r.speed, 1.0);
+                assert_eq!(r.speaker_id, 0);
+            }
+            _ => panic!("expected synthesize"),
+        }
     }
 
     #[test]
-    fn request_rejects_legacy_espeak_data_dir_as_unknown_field() {
-        let request = r#"{
-            "text":"Hello",
-            "voice":"en_US-hfc_female-medium",
-            "speed":1.0,
-            "model_dir":"C:\\voices\\en_US-hfc_female-medium",
-            "espeak_data_dir":"C:\\runtime\\espeak-runtime"
-        }"#;
-
-        let error = serde_json::from_str::<TtsRequest>(request).expect_err("request should fail");
-        let message = error.to_string();
-
-        assert!(message.contains("unknown field `espeak_data_dir`"));
+    fn phonemize_request_deserializes() {
+        let request =
+            r#"{"op":"phonemize","id":"r2","text":"hello","language":"en"}"#;
+        let parsed: SidecarRequest =
+            serde_json::from_str(request).expect("phonemize should parse");
+        match parsed {
+            SidecarRequest::Phonemize(r) => {
+                assert_eq!(r.id, "r2");
+                assert_eq!(r.language, "en");
+            }
+            _ => panic!("expected phonemize"),
+        }
     }
 
     #[test]
-    fn request_rejects_language_as_unknown_field() {
-        let request = r#"{
-            "text":"Hello",
-            "language":"en",
-            "voice":"en_US-hfc_female-medium",
-            "speed":1.0,
-            "model_dir":"C:\\voices\\en_US-hfc_female-medium"
-        }"#;
-
-        let error = serde_json::from_str::<TtsRequest>(request).expect_err("request should fail");
-        let message = error.to_string();
-
-        assert!(message.contains("unknown field `language`"));
+    fn unknown_op_is_rejected() {
+        let request =
+            r#"{"op":"cancel","id":"r3"}"#;
+        let error = serde_json::from_str::<SidecarRequest>(request)
+            .expect_err("unknown op should fail");
+        assert!(error.to_string().contains("unknown variant"));
     }
 
     #[test]
-    fn request_validation_rejects_empty_text() {
-        let error = parse_request("", 1.0)
-            .validate()
-            .expect_err("empty text should fail");
-
-        assert!(error.contains("text must not be empty or whitespace"));
+    fn legacy_type_field_is_rejected() {
+        let request = r#"{"type":"synthesize","id":"r1","text":"hi","voice_model_path":"a","voice_config_path":"b"}"#;
+        let error =
+            serde_json::from_str::<SidecarRequest>(request).expect_err("type is not a valid tag");
+        let msg = error.to_string();
+        assert!(msg.contains("missing field `op`") || msg.contains("unknown field `type`"));
     }
 
     #[test]
-    fn request_validation_rejects_whitespace_only_text() {
-        let error = parse_request("   \n\t  ", 1.0)
-            .validate()
-            .expect_err("whitespace-only text should fail");
-
-        assert!(error.contains("text must not be empty or whitespace"));
+    fn synthesize_rejects_empty_id() {
+        let r = SynthesizeRequest {
+            id: String::new(),
+            text: "hi".to_string(),
+            voice_model_path: "a".to_string(),
+            voice_config_path: "b".to_string(),
+            speaker_id: 0,
+            speed: 1.0,
+        };
+        assert!(r.validate().is_err());
     }
 
     #[test]
-    fn request_validation_rejects_whitespace_only_voice() {
-        let error = parse_request_with_fields(
-            "Hello",
-            " \n\t ",
-            1.0,
-            "C:\\voices\\en_US-hfc_female-medium",
-        )
-        .validate()
-        .expect_err("whitespace-only voice should fail");
-
-        assert_eq!(error, "voice must not be empty or whitespace");
+    fn synthesize_rejects_id_longer_than_128_bytes() {
+        let r = SynthesizeRequest {
+            id: "x".repeat(129),
+            text: "hi".to_string(),
+            voice_model_path: "a".to_string(),
+            voice_config_path: "b".to_string(),
+            speaker_id: 0,
+            speed: 1.0,
+        };
+        let e = r.validate().expect_err("long id should fail");
+        assert!(e.contains("128 bytes"));
     }
 
     #[test]
-    fn request_validation_rejects_whitespace_only_model_dir() {
-        let error = parse_request_with_fields("Hello", "en_US-hfc_female-medium", 1.0, " \n\t ")
-            .validate()
-            .expect_err("whitespace-only model_dir should fail");
-
-        assert_eq!(error, "model_dir must not be empty or whitespace");
+    fn synthesize_rejects_whitespace_text() {
+        let r = SynthesizeRequest {
+            id: "r1".to_string(),
+            text: "   ".to_string(),
+            voice_model_path: "a".to_string(),
+            voice_config_path: "b".to_string(),
+            speaker_id: 0,
+            speed: 1.0,
+        };
+        assert!(r.validate().is_err());
     }
 
     #[test]
-    fn request_validation_accepts_text_at_max_length() {
-        let text = "a".repeat(8192);
+    fn speed_is_clamped_to_directive_range() {
+        let low = SynthesizeRequest {
+            id: "r1".to_string(),
+            text: "hi".to_string(),
+            voice_model_path: "a".to_string(),
+            voice_config_path: "b".to_string(),
+            speaker_id: 0,
+            speed: 0.1,
+        };
+        assert_eq!(low.clamped_speed(), 0.5);
 
-        parse_request(&text, 1.0)
-            .validate()
-            .expect("text at limit should pass");
+        let high = SynthesizeRequest {
+            id: "r1".to_string(),
+            text: "hi".to_string(),
+            voice_model_path: "a".to_string(),
+            voice_config_path: "b".to_string(),
+            speaker_id: 0,
+            speed: 3.0,
+        };
+        assert_eq!(high.clamped_speed(), 2.0);
     }
 
     #[test]
-    fn request_validation_accepts_unicode_text() {
-        parse_request("Olá, 世界 👋", 1.0)
-            .validate()
-            .expect("Unicode text should pass");
+    fn phonemize_rejects_empty_language() {
+        let r = PhonemizeRequest {
+            id: "r1".to_string(),
+            text: "hi".to_string(),
+            language: "".to_string(),
+        };
+        assert!(r.validate().is_err());
     }
 
     #[test]
-    fn request_validation_accepts_text_with_newlines() {
-        parse_request("First line\nSecond line", 1.0)
-            .validate()
-            .expect("text with embedded newlines should pass");
-    }
-
-    #[test]
-    fn request_validation_rejects_text_above_max_length() {
-        let text = "a".repeat(8193);
-        let error = parse_request(&text, 1.0)
-            .validate()
-            .expect_err("text above limit should fail");
-
-        assert!(error.contains("text must be at most 8192 characters"));
-    }
-
-    #[test]
-    fn request_validation_accepts_speed_at_lower_bound() {
-        parse_request("Hello", 0.5)
-            .validate()
-            .expect("lower speed bound should pass");
-    }
-
-    #[test]
-    fn request_validation_accepts_speed_at_upper_bound() {
-        parse_request("Hello", 5.5)
-            .validate()
-            .expect("upper speed bound should pass");
-    }
-
-    #[test]
-    fn request_validation_rejects_speed_below_lower_bound() {
-        let error = parse_request("Hello", 0.49)
-            .validate()
-            .expect_err("speed below range should fail");
-
-        assert!(error.contains("speed must be a finite number between 0.5 and 5.5"));
-    }
-
-    #[test]
-    fn request_validation_rejects_speed_above_upper_bound() {
-        let error = parse_request("Hello", 5.51)
-            .validate()
-            .expect_err("speed above range should fail");
-
-        assert!(error.contains("speed must be a finite number between 0.5 and 5.5"));
+    fn reserved_ops_are_unknown_variants() {
+        for op in ["cancel", "audio_chunk"] {
+            let request = format!(r#"{{"op":"{op}","id":"r1"}}"#);
+            let error = serde_json::from_str::<SidecarRequest>(&request)
+                .expect_err("reserved op should not deserialize");
+            assert!(error.to_string().contains("unknown variant"));
+        }
     }
 }
