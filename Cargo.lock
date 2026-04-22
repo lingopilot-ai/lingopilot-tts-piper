@@ -199,7 +199,7 @@ dependencies = [
 
 [[package]]
 name = "lingopilot-tts-piper"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "espeak-rs-sys",
  "ort",
@@ -370,6 +370,7 @@ dependencies = [
  "ort",
  "serde",
  "serde_json",
+ "tracing",
 ]
 
 [[package]]

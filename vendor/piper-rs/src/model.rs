@@ -35,8 +35,73 @@ pub struct ModelConfig {
     pub espeak: ESpeakConfig,
     pub inference: InferenceConfig,
     pub num_speakers: u32,
+    #[serde(default, deserialize_with = "deserialize_lenient_speaker_id_map")]
     pub speaker_id_map: HashMap<String, i64>,
     pub phoneme_id_map: HashMap<char, Vec<i64>>,
+    // Preserved-but-not-consumed: accepted leniently so non-canonical shapes
+    // that the host previously normalized never panic this deserializer.
+    #[serde(default, deserialize_with = "deserialize_lenient_phoneme_map")]
+    pub phoneme_map: HashMap<i64, Option<String>>,
+}
+
+fn deserialize_lenient_speaker_id_map<'de, D>(
+    deserializer: D,
+) -> Result<HashMap<String, i64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde_json::Value;
+    let value = Value::deserialize(deserializer)?;
+    let Value::Object(obj) = value else {
+        tracing::debug!(
+            shape = ?value,
+            "speaker_id_map not an object; falling back to empty map"
+        );
+        return Ok(HashMap::new());
+    };
+    let mut out = HashMap::with_capacity(obj.len());
+    for (k, v) in obj {
+        let Some(i) = v.as_i64() else {
+            tracing::debug!(
+                key = %k, value = ?v,
+                "speaker_id_map value not integer; falling back to empty map"
+            );
+            return Ok(HashMap::new());
+        };
+        out.insert(k, i);
+    }
+    Ok(out)
+}
+
+fn deserialize_lenient_phoneme_map<'de, D>(
+    deserializer: D,
+) -> Result<HashMap<i64, Option<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde_json::Value;
+    let value = Value::deserialize(deserializer)?;
+    let Value::Object(obj) = value else {
+        tracing::debug!(shape = ?value, "phoneme_map not an object; falling back to empty map");
+        return Ok(HashMap::new());
+    };
+    let mut out = HashMap::with_capacity(obj.len());
+    for (k, v) in obj {
+        let Ok(key) = k.parse::<i64>() else {
+            tracing::debug!(key = %k, "phoneme_map key not int-parseable; falling back to empty map");
+            return Ok(HashMap::new());
+        };
+        let val = match v {
+            Value::String(s) => Some(s),
+            Value::Null => None,
+            other => {
+                tracing::debug!(key = %k, value = ?other, "phoneme_map value not string|null; falling back to empty map");
+                return Ok(HashMap::new());
+            }
+        };
+        out.insert(key, val);
+    }
+    Ok(out)
 }
 
 pub fn phonemes_to_ids(config: &ModelConfig, phonemes: &str) -> Vec<i64> {
@@ -89,4 +154,92 @@ pub fn infer(
         .map_err(|e| PiperError::InferenceError(format!("Failed to extract output: {}", e)))?;
 
     Ok(audio.to_vec())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config_json(speaker_id_map: &str, phoneme_map_field: &str) -> String {
+        format!(
+            r#"{{
+                "audio": {{ "sample_rate": 22050 }},
+                "espeak": {{ "voice": "en-us" }},
+                "inference": {{ "noise_scale": 0.667, "length_scale": 1.0, "noise_w": 0.8 }},
+                "num_speakers": 1,
+                "speaker_id_map": {speaker_id_map},
+                "phoneme_id_map": {{ "a": [1] }}{phoneme_map_field}
+            }}"#
+        )
+    }
+
+    fn parse(speaker_id_map: &str, phoneme_map_field: &str) -> ModelConfig {
+        serde_json::from_str(&config_json(speaker_id_map, phoneme_map_field))
+            .expect("lenient deserializer must accept host-normalized shapes")
+    }
+
+    #[test]
+    fn speaker_id_map_canonical_preserved() {
+        let cfg = parse(r#"{"alice": 0, "bob": 1}"#, "");
+        assert_eq!(cfg.speaker_id_map.get("alice"), Some(&0));
+        assert_eq!(cfg.speaker_id_map.get("bob"), Some(&1));
+    }
+
+    #[test]
+    fn speaker_id_map_null_falls_back_to_empty() {
+        let cfg = parse("null", "");
+        assert!(cfg.speaker_id_map.is_empty());
+    }
+
+    #[test]
+    fn speaker_id_map_array_falls_back_to_empty() {
+        let cfg = parse("[0, 1, 2]", "");
+        assert!(cfg.speaker_id_map.is_empty());
+    }
+
+    #[test]
+    fn speaker_id_map_non_integer_value_falls_back_to_empty() {
+        let cfg = parse(r#"{"alice": "zero"}"#, "");
+        assert!(cfg.speaker_id_map.is_empty());
+    }
+
+    #[test]
+    fn speaker_id_map_missing_defaults_empty() {
+        // omit speaker_id_map entirely
+        let json = r#"{
+            "audio": { "sample_rate": 22050 },
+            "espeak": { "voice": "en-us" },
+            "inference": { "noise_scale": 0.667, "length_scale": 1.0, "noise_w": 0.8 },
+            "num_speakers": 1,
+            "phoneme_id_map": { "a": [1] }
+        }"#;
+        let cfg: ModelConfig = serde_json::from_str(json).expect("missing field must default");
+        assert!(cfg.speaker_id_map.is_empty());
+        assert!(cfg.phoneme_map.is_empty());
+    }
+
+    #[test]
+    fn phoneme_map_canonical_preserved() {
+        let cfg = parse(r#"{}"#, r#", "phoneme_map": {"97": "a", "98": null}"#);
+        assert_eq!(cfg.phoneme_map.get(&97), Some(&Some("a".to_string())));
+        assert_eq!(cfg.phoneme_map.get(&98), Some(&None));
+    }
+
+    #[test]
+    fn phoneme_map_non_object_falls_back_to_empty() {
+        let cfg = parse(r#"{}"#, r#", "phoneme_map": [1, 2, 3]"#);
+        assert!(cfg.phoneme_map.is_empty());
+    }
+
+    #[test]
+    fn phoneme_map_non_int_key_falls_back_to_empty() {
+        let cfg = parse(r#"{}"#, r#", "phoneme_map": {"a": "x"}"#);
+        assert!(cfg.phoneme_map.is_empty());
+    }
+
+    #[test]
+    fn phoneme_map_bad_value_type_falls_back_to_empty() {
+        let cfg = parse(r#"{}"#, r#", "phoneme_map": {"97": 42}"#);
+        assert!(cfg.phoneme_map.is_empty());
+    }
 }

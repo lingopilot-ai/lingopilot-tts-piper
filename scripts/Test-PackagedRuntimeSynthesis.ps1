@@ -124,6 +124,56 @@ try {
             throw "Runtime smoke failed: expected done envelope echoing id, got '$doneLine'."
         }
 
+        # Synthesize #2 — regression fixture for directive 2026-04-22d:
+        # clone the canonical voice and mutate the .onnx.json so that
+        # speaker_id_map and phoneme_map take shapes the host previously had
+        # to normalize (speaker_id_map_needs_compatibility_patch /
+        # phoneme_map_needs_compatibility_patch). The sidecar must accept
+        # them without panic and still produce a valid audio frame.
+        $mutantVoiceDir = Join-Path $packageRoot "voice-fixtures\$VoiceId-mutant"
+        $mutantModelPath = Join-Path $mutantVoiceDir "$VoiceId.onnx"
+        $mutantConfigPath = Join-Path $mutantVoiceDir "$VoiceId.onnx.json"
+        New-Item -ItemType Directory -Force -Path $mutantVoiceDir | Out-Null
+        Copy-Item -LiteralPath $modelPath -Destination $mutantModelPath -Force
+        # phoneme_id_map has case-sensitive keys ('X' vs 'x'); -AsHashtable preserves them.
+        $canonicalConfig = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json -AsHashtable
+        $canonicalConfig["speaker_id_map"] = @{ alice = "zero" }
+        $canonicalConfig["phoneme_map"] = @(1, 2, 3)
+        $canonicalConfig | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $mutantConfigPath -Encoding UTF8
+
+        $request2 = @{
+            op                = "synthesize"
+            id                = "runtime-smoke-2-synthetic"
+            text              = "Non canonical config smoke."
+            voice_model_path  = $mutantModelPath
+            voice_config_path = $mutantConfigPath
+            speed             = 1.0
+        } | ConvertTo-Json -Compress
+
+        $process.StandardInput.WriteLine($request2)
+        $process.StandardInput.Flush()
+
+        $audio2Line = Read-LineBytes -Stream $stdout
+        $audio2 = $audio2Line | ConvertFrom-Json
+        if ($audio2.op -ne "audio") {
+            $stderrText = $process.StandardError.ReadToEnd()
+            throw "Runtime smoke (mutant) failed: expected audio, got '$audio2Line'. stderr: $stderrText"
+        }
+        if ($audio2.sample_rate -ne 22050 -or $audio2.channels -ne 1) {
+            throw "Runtime smoke (mutant) failed: audio header does not match directive. Got '$audio2Line'."
+        }
+        if ([int]$audio2.bytes -le 0) {
+            throw "Runtime smoke (mutant) failed: audio.bytes must be positive. Got '$audio2Line'."
+        }
+
+        $null = Read-ExactBytes -Stream $stdout -Count ([int]$audio2.bytes)
+
+        $done2Line = Read-LineBytes -Stream $stdout
+        $done2 = $done2Line | ConvertFrom-Json
+        if ($done2.op -ne "done" -or $done2.id -ne "runtime-smoke-2-synthetic") {
+            throw "Runtime smoke (mutant) failed: expected done envelope echoing id, got '$done2Line'."
+        }
+
         $process.StandardInput.Close()
         $null = $process.WaitForExit(10000)
         if (-not $process.HasExited) {
