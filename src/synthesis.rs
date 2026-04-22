@@ -1,12 +1,11 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
-use piper_rs::from_config_path;
-use piper_rs::synth::{AudioOutputConfig, PiperSpeechSynthesizer};
+use piper_rs::Piper;
 
-type SynthHandle = Arc<PiperSpeechSynthesizer>;
-type SynthLoader = dyn Fn(&Path) -> Result<SynthHandle, String> + Send + Sync;
+type SynthHandle = Arc<Mutex<Piper>>;
+type SynthLoader = dyn Fn(&Path, &Path) -> Result<SynthHandle, String> + Send + Sync;
 
 /// Result of a successful TTS synthesis.
 pub struct SynthResult {
@@ -28,12 +27,12 @@ impl SynthesisCache {
     /// Create a cache that loads Piper models on first use and reuses them
     /// for the lifetime of the process.
     pub fn new() -> Self {
-        Self::with_loader(load_model_from_config)
+        Self::with_loader(load_piper)
     }
 
     fn with_loader<L>(loader: L) -> Self
     where
-        L: Fn(&Path) -> Result<SynthHandle, String> + Send + Sync + 'static,
+        L: Fn(&Path, &Path) -> Result<SynthHandle, String> + Send + Sync + 'static,
     {
         Self {
             models: HashMap::new(),
@@ -45,72 +44,51 @@ impl SynthesisCache {
     pub fn synthesize(
         &mut self,
         text: &str,
+        voice_model_path: &Path,
         voice_config_path: &Path,
         speed: f32,
     ) -> Result<SynthResult, String> {
-        let synth = self.get_or_load_synth(voice_config_path)?;
-        synthesize_with_synth(synth.as_ref(), text, speed)
+        let piper = self.get_or_load(voice_model_path, voice_config_path)?;
+        synthesize_with_piper(&piper, text, speed)
     }
 
-    fn get_or_load_synth(&mut self, voice_config_path: &Path) -> Result<SynthHandle, String> {
-        get_or_load_cached(
-            &mut self.models,
-            voice_config_path,
-            &self.loader,
-            "voice config",
-        )
-    }
-}
+    fn get_or_load(
+        &mut self,
+        model_path: &Path,
+        config_path: &Path,
+    ) -> Result<SynthHandle, String> {
+        let key = config_path;
+        if let Some(value) = self.models.get(key) {
+            tracing::debug!(
+                event = "synth_cache_hit",
+                cache_key = key.display().to_string()
+            );
+            return Ok(Arc::clone(value));
+        }
 
-fn load_model_from_config(config_path: &Path) -> Result<SynthHandle, String> {
-    let model =
-        from_config_path(config_path).map_err(|e| format!("Failed to load Piper voice: {}", e))?;
-    let synth = PiperSpeechSynthesizer::new(model)
-        .map_err(|e| format!("Failed to create synthesizer: {}", e))?;
-    Ok(Arc::new(synth))
-}
-
-fn get_or_load_cached<T, L>(
-    cache: &mut HashMap<PathBuf, Arc<T>>,
-    cache_key: &Path,
-    loader: &L,
-    cache_label: &str,
-) -> Result<Arc<T>, String>
-where
-    T: Send + Sync + 'static,
-    L: Fn(&Path) -> Result<Arc<T>, String> + ?Sized,
-{
-    if let Some(value) = cache.get(cache_key) {
         tracing::debug!(
-            event = "synth_cache_hit",
-            cache_label,
-            cache_key = cache_key.display().to_string()
+            event = "synth_cache_miss",
+            cache_key = key.display().to_string()
         );
-        return Ok(Arc::clone(value));
-    }
-
-    tracing::debug!(
-        event = "synth_cache_miss",
-        cache_label,
-        cache_key = cache_key.display().to_string()
-    );
-
-    let value = match loader(cache_key) {
-        Ok(value) => value,
-        Err(error) => {
+        let value = (self.loader)(model_path, config_path).map_err(|e| {
             tracing::debug!(
                 event = "synth_cache_load_failed",
-                cache_label,
-                cache_key = cache_key.display().to_string(),
-                detail = error.as_str()
+                cache_key = key.display().to_string(),
+                detail = e.as_str()
             );
-            return Err(error);
-        }
-    };
-
-    cache.insert(cache_key.to_path_buf(), Arc::clone(&value));
-    Ok(value)
+            e
+        })?;
+        self.models.insert(key.to_path_buf(), Arc::clone(&value));
+        Ok(value)
+    }
 }
+
+fn load_piper(model_path: &Path, config_path: &Path) -> Result<SynthHandle, String> {
+    let piper = Piper::new(model_path, config_path)
+        .map_err(|e| format!("Failed to load Piper voice: {}", e))?;
+    Ok(Arc::new(Mutex::new(piper)))
+}
+
 
 /// Validate the process-scoped eSpeak runtime directory.
 pub fn validate_espeak_data_dir(data_dir: &Path) -> Result<(), String> {
@@ -181,66 +159,34 @@ pub fn validate_voice_file(path: &Path, kind: &str) -> Result<(), String> {
     }
 }
 
-/// Convert a speed multiplier (1.0 = normal) to a piper-rs rate percentage (0-100).
-/// piper-rs rate range is 0.5..5.5, mapped to 0..100.
-/// A speed of 1.0 maps to ~10% in piper-rs terms (the default).
-fn speed_to_rate_percent(speed: f32) -> Option<u8> {
-    if (speed - 1.0).abs() < 0.01 {
-        return None; // Use default speed
-    }
-    // Map speed multiplier to the 0-100 range that piper-rs uses
-    // Rate range in piper-rs: 0.5..5.5 -> 0..100
-    let percent = ((speed - 0.5) / (5.5 - 0.5) * 100.0).clamp(0.0, 100.0) as u8;
-    Some(percent)
-}
-
-fn synthesize_with_synth(
-    synth: &PiperSpeechSynthesizer,
+fn synthesize_with_piper(
+    piper: &Mutex<Piper>,
     text: &str,
     speed: f32,
 ) -> Result<SynthResult, String> {
-    let sample_rate = synth
-        .clone_model()
-        .audio_output_info()
-        .map_err(|e| format!("Failed to get audio info: {}", e))?
-        .sample_rate as u32;
+    let mut guard = piper
+        .lock()
+        .map_err(|_| "Piper cache lock poisoned".to_string())?;
 
-    let audio_cfg = AudioOutputConfig {
-        rate: speed_to_rate_percent(speed),
-        volume: None,
-        pitch: None,
-        appended_silence_ms: None,
+    // In Piper, length_scale is the inverse of speed: lower length_scale
+    // produces faster speech.
+    let length_scale = if (speed - 1.0).abs() < f32::EPSILON {
+        None
+    } else {
+        Some(1.0 / speed)
     };
 
-    // Collect all audio samples from the parallel synthesizer
-    let mut all_samples_f32: Vec<f32> = Vec::new();
-
-    let stream = synth
-        .synthesize_parallel(text.to_string(), Some(audio_cfg))
+    let (samples, sample_rate) = guard
+        .create(text, false, None, length_scale, None, None)
         .map_err(|e| format!("Synthesis failed: {}", e))?;
 
-    for result in stream {
-        match result {
-            Ok(samples) => {
-                all_samples_f32.extend(samples.into_vec());
-            }
-            Err(e) => {
-                return Err(format!("Synthesis chunk failed: {}", e));
-            }
-        }
-    }
-
-    if all_samples_f32.is_empty() {
+    if samples.is_empty() {
         return Err("Synthesis produced no audio".to_string());
     }
 
-    // Convert f32 samples to i16 (PCM16)
-    let pcm16: Vec<i16> = all_samples_f32
+    let pcm16: Vec<i16> = samples
         .iter()
-        .map(|&s| {
-            let clamped = s.clamp(-1.0, 1.0);
-            (clamped * 32767.0) as i16
-        })
+        .map(|&s| (s.clamp(-1.0, 1.0) * 32767.0) as i16)
         .collect();
 
     Ok(SynthResult { pcm16, sample_rate })
@@ -249,13 +195,9 @@ fn synthesize_with_synth(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        get_or_load_cached, validate_espeak_data_dir, validate_voice_file,
-    };
+    use super::{validate_espeak_data_dir, validate_voice_file};
     use std::fs;
     use std::path::{Path, PathBuf};
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Arc;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     struct TempDir {
@@ -287,9 +229,6 @@ mod tests {
             let _ = fs::remove_dir_all(&self.path);
         }
     }
-
-    #[derive(Debug)]
-    struct FakeLoadedVoice(&'static str);
 
     fn create_espeak_runtime(dir: &Path) {
         fs::create_dir(dir.join("espeak-ng-data")).expect("runtime data dir should be created");
@@ -391,54 +330,4 @@ mod tests {
         assert!(error.contains("path is not a file"));
     }
 
-    #[test]
-    fn cache_reuses_loaded_model_for_same_config_path() {
-        let temp_dir = TempDir::new("cache-same-path");
-        let config_path = create_voice_config(temp_dir.path(), "voice-a");
-
-        let load_count = Arc::new(AtomicUsize::new(0));
-        let mut cache = std::collections::HashMap::<PathBuf, Arc<FakeLoadedVoice>>::new();
-        let loader = {
-            let load_count = Arc::clone(&load_count);
-            move |_config_path: &Path| {
-                load_count.fetch_add(1, Ordering::SeqCst);
-                Ok(Arc::new(FakeLoadedVoice("voice-a")))
-            }
-        };
-
-        let first = get_or_load_cached(&mut cache, &config_path, &loader, "voice config")
-            .expect("first load should succeed");
-        let second = get_or_load_cached(&mut cache, &config_path, &loader, "voice config")
-            .expect("second load should succeed");
-
-        assert_eq!(first.0, "voice-a");
-        assert!(Arc::ptr_eq(&first, &second));
-        assert_eq!(load_count.load(Ordering::SeqCst), 1);
-    }
-
-    #[test]
-    fn cache_does_not_store_failed_loads() {
-        let temp_dir = TempDir::new("cache-failed-loads");
-        let config_path = create_voice_config(temp_dir.path(), "voice-a");
-
-        let load_count = Arc::new(AtomicUsize::new(0));
-        let mut cache = std::collections::HashMap::<PathBuf, Arc<FakeLoadedVoice>>::new();
-        let loader = {
-            let load_count = Arc::clone(&load_count);
-            move |_config_path: &Path| {
-                load_count.fetch_add(1, Ordering::SeqCst);
-                Err::<Arc<FakeLoadedVoice>, String>("synthetic loader failure".to_string())
-            }
-        };
-
-        let first = get_or_load_cached(&mut cache, &config_path, &loader, "voice config")
-            .expect_err("first load should fail");
-        let second = get_or_load_cached(&mut cache, &config_path, &loader, "voice config")
-            .expect_err("second load should fail");
-
-        assert_eq!(first, "synthetic loader failure");
-        assert_eq!(second, "synthetic loader failure");
-        assert_eq!(load_count.load(Ordering::SeqCst), 2);
-        assert!(cache.is_empty());
-    }
 }

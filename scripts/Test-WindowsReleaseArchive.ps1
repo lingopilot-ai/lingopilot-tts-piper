@@ -23,9 +23,10 @@ try {
 
     $binaryPath = Join-Path $packageRoot "lingopilot-tts-piper.exe"
     $runtimeDir = Join-Path $packageRoot "espeak-runtime"
+    $onnxruntimeDll = Join-Path $packageRoot "onnxruntime.dll"
     $thirdPartyLicensesPath = Join-Path $packageRoot "THIRD_PARTY_LICENSES.txt"
 
-    foreach ($requiredPath in @($binaryPath, $runtimeDir, (Join-Path $runtimeDir "espeak-ng-data"), $thirdPartyLicensesPath)) {
+    foreach ($requiredPath in @($binaryPath, $runtimeDir, (Join-Path $runtimeDir "espeak-ng-data"), $onnxruntimeDll, $thirdPartyLicensesPath)) {
         if (-not (Test-Path $requiredPath)) {
             throw "Smoke test input is missing: $requiredPath"
         }

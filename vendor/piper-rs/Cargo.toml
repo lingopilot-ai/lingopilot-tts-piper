@@ -1,0 +1,25 @@
+[workspace]
+members = ["crates/espeak-rs"]
+resolver = "1"
+
+[package]
+name = "piper-rs"
+version = "0.1.9"
+edition = "2021"
+license = "MIT"
+description = "Use piper TTS models in Rust"
+repository = "https://github.com/thewh1teagle/piper-rs"
+
+[dependencies]
+espeak-rs = { path = "crates/espeak-rs", version = "0.1.9", default-features = false }
+ndarray = "0.16.1"
+serde = { version = "1.0.160", features = ["derive"] }
+serde_json = "1.0.89"
+ort = { version = "=2.0.0-rc.12", default-features = false, features = ["std", "ndarray", "load-dynamic", "api-24"] }
+
+[dev-dependencies]
+rodio = "0.19.0"
+
+[features]
+default = ["compile-espeak-intonations"]
+compile-espeak-intonations = ["espeak-rs/compile-espeak-intonations"]

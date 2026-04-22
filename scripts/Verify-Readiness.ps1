@@ -22,7 +22,7 @@ try {
         }
 
         if ([string]::IsNullOrWhiteSpace($ortDylibPath)) {
-            $canonicalOrtPath = Join-Path $env:LOCALAPPDATA "LingoPilot\OnnxRuntime\1.20.0\onnxruntime.dll"
+            $canonicalOrtPath = Join-Path $env:LOCALAPPDATA "LingoPilot\OnnxRuntime\1.24.4\onnxruntime.dll"
             if (Test-Path -LiteralPath $canonicalOrtPath) {
                 $ortDylibPath = (Resolve-Path $canonicalOrtPath).Path
                 $env:ORT_DYLIB_PATH = $ortDylibPath

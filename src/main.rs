@@ -224,7 +224,7 @@ fn handle_synthesize(cache: &mut synthesis::SynthesisCache, req: SynthesizeReque
 
     let speed = req.clamped_speed();
 
-    match cache.synthesize(&req.text, config_path, speed) {
+    match cache.synthesize(&req.text, model_path, config_path, speed) {
         Ok(result) => {
             let byte_len = (result.pcm16.len() * 2) as u32;
 

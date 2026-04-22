@@ -1,6 +1,6 @@
 param(
     [string]$VoicesRoot = (Join-Path $env:LOCALAPPDATA "LingoPilot\PiperVoices"),
-    [string]$OrtDylibPath = (Join-Path $env:LOCALAPPDATA "LingoPilot\OnnxRuntime\1.20.0\onnxruntime.dll"),
+    [string]$OrtDylibPath = (Join-Path $env:LOCALAPPDATA "LingoPilot\OnnxRuntime\1.24.4\onnxruntime.dll"),
     [string]$OutputDir = (Join-Path $PSScriptRoot "..\dist\eight-languages"),
     [switch]$SkipPlayback
 )

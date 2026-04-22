@@ -38,6 +38,10 @@ jobs:
         shell: pwsh
         run: .\scripts\Test-WindowsReleaseArchive.ps1 -ZipPath "dist\lingopilot-tts-piper-${{ github.ref_name }}-windows-x86_64.zip"
 
+      - name: Runtime synthesis smoke gate
+        shell: pwsh
+        run: .\scripts\Test-PackagedRuntimeSynthesis.ps1 -ZipPath "dist\lingopilot-tts-piper-${{ github.ref_name }}-windows-x86_64.zip"
+
       - name: Verify readiness gate
         shell: pwsh
         run: .\scripts\Verify-Readiness.ps1 -Packaged

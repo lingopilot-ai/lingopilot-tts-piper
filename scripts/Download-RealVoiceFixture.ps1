@@ -1,7 +1,7 @@
 param(
     [string]$VoiceId = "en_US-hfc_female-medium",
     [string]$DestinationRoot = (Join-Path $env:LOCALAPPDATA "LingoPilot\PiperVoices"),
-    [string]$OrtRuntimeRoot = (Join-Path $env:LOCALAPPDATA "LingoPilot\OnnxRuntime\1.20.0"),
+    [string]$OrtRuntimeRoot = (Join-Path $env:LOCALAPPDATA "LingoPilot\OnnxRuntime\1.24.4"),
     [switch]$Force
 )
 
@@ -36,7 +36,7 @@ function Install-OrtRuntime {
         [switch]$ForceDownload
     )
 
-    $ortVersion = "1.20.0"
+    $ortVersion = "1.24.4"
     $archiveUrl = "https://github.com/microsoft/onnxruntime/releases/download/v$ortVersion/onnxruntime-win-x64-$ortVersion.zip"
     $onnxruntimeDll = Join-Path $DestinationDir "onnxruntime.dll"
     $directMlDll = Join-Path $DestinationDir "DirectML.dll"

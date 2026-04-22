@@ -28,11 +28,17 @@ $versionTag = "v$normalizedVersion"
 $assetBase = "lingopilot-tts-piper-$versionTag-windows-x86_64"
 $binaryPath = Join-Path $repoRoot "target\release\lingopilot-tts-piper.exe"
 $runtimeDir = Join-Path $repoRoot "target\release\espeak-runtime"
+$onnxruntimeDll = Join-Path $repoRoot "target\release\onnxruntime.dll"
 $readmePath = Join-Path $repoRoot "README.md"
 $licensePath = Join-Path $repoRoot "LICENSE"
 $thirdPartyLicensesPath = Join-Path $repoRoot "THIRD_PARTY_LICENSES.txt"
 
-foreach ($requiredPath in @($binaryPath, $runtimeDir, $readmePath, $licensePath, $thirdPartyLicensesPath)) {
+# Make sure onnxruntime.dll 1.24.x is staged next to the release binary so it
+# ships in the release zip as a sibling of lingopilot-tts-piper.exe.
+& (Join-Path $PSScriptRoot "Install-OnnxRuntime.ps1") `
+    -DestinationDir (Join-Path $repoRoot "target\release") | Out-Null
+
+foreach ($requiredPath in @($binaryPath, $runtimeDir, $onnxruntimeDll, $readmePath, $licensePath, $thirdPartyLicensesPath)) {
     if (-not (Test-Path $requiredPath)) {
         throw "Required release input is missing: $requiredPath"
     }
@@ -59,6 +65,7 @@ if (Test-Path $zipPath) {
 New-Item -ItemType Directory -Force -Path $packageRoot | Out-Null
 
 Copy-Item -LiteralPath $binaryPath -Destination (Join-Path $packageRoot "lingopilot-tts-piper.exe")
+Copy-Item -LiteralPath $onnxruntimeDll -Destination (Join-Path $packageRoot "onnxruntime.dll")
 Copy-Item -LiteralPath $runtimeDir -Destination (Join-Path $packageRoot "espeak-runtime") -Recurse
 Copy-Item -LiteralPath $readmePath -Destination (Join-Path $packageRoot "README.md")
 Copy-Item -LiteralPath $licensePath -Destination (Join-Path $packageRoot "LICENSE")

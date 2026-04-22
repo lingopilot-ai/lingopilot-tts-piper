@@ -13,8 +13,8 @@ path = "src/main.rs"
 
 [dependencies]
 piper-rs = { version = "0.1.9", default-features = false }
-ort = { version = "=2.0.0-rc.9", features = ["load-dynamic"] }
-ort-sys = "=2.0.0-rc.9"
+ort = { version = "=2.0.0-rc.12", default-features = false, features = ["std", "ndarray", "load-dynamic", "api-24"] }
+ort-sys = "=2.0.0-rc.12"
 espeak-rs-sys = "0.1.9"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -24,6 +24,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 [patch.crates-io]
 # Patched: removed explicit msvcrtd link that conflicts with modern UCRT in debug builds.
 espeak-rs-sys = { path = "vendor/espeak-rs-sys" }
+# Vendored piper-rs bumped to ort 2.0.0-rc.12 (ONNX Runtime 1.24.x) so that
+# the sidecar's ORT major.minor matches Kokoro per the 2026-04-22c directive.
+piper-rs = { path = "vendor/piper-rs" }
 
 [profile.release]
 lto = true
