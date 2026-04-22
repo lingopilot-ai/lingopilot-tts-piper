@@ -11,3 +11,5 @@
 .idea/
 AGENTS.md
 BACKLOG.md
+vendor/piper-rs/Cargo.lock
+.claude/scheduled_tasks.lock
