@@ -76,6 +76,10 @@ fn validate_text(text: &str) -> Result<(), String> {
     if text.trim().is_empty() {
         return Err("text must not be empty or whitespace".to_string());
     }
+    validate_text_length(text)
+}
+
+fn validate_text_length(text: &str) -> Result<(), String> {
     if text.chars().count() > MAX_TEXT_CHARS {
         return Err(format!("text must be at most {MAX_TEXT_CHARS} characters"));
     }
@@ -107,12 +111,24 @@ impl SynthesizeRequest {
 impl PhonemizeRequest {
     pub fn validate(&self) -> Result<(), String> {
         validate_id(&self.id)?;
-        validate_text(&self.text)?;
+        // Empty / whitespace / punct-only text is legal for phonemize per
+        // directive 2026-04-22e §P1.4; the handler returns {phonemes:"", words:[]}.
+        validate_text_length(&self.text)?;
         if self.language.trim().is_empty() {
             return Err("language must not be empty or whitespace".to_string());
         }
         Ok(())
     }
+}
+
+/// Per-word entry in a `phonemes` response. `words[].text` reconstructs the
+/// request input modulo whitespace; `words[].phonemes` is a best-effort split
+/// of the top-level IPA string and is NOT asserted byte-equal to the join of
+/// the top-level per directive 2026-04-22e.
+#[derive(Debug, Serialize)]
+pub struct WordEntry<'a> {
+    pub text: &'a str,
+    pub phonemes: &'a str,
 }
 
 /// Response emitted on stdout, discriminated by the `op` field.
@@ -137,7 +153,11 @@ pub enum SidecarResponse<'a> {
     #[serde(rename = "done")]
     Done { id: &'a str },
     #[serde(rename = "phonemes")]
-    Phonemes { id: &'a str, phonemes: &'a str },
+    Phonemes {
+        id: &'a str,
+        phonemes: &'a str,
+        words: &'a [WordEntry<'a>],
+    },
     #[serde(rename = "error")]
     Error {
         id: Option<&'a str>,
@@ -154,7 +174,7 @@ mod tests {
     fn ready_response_matches_directive_line() {
         let ops: &[&str] = &SUPPORTED_OPS;
         let response = SidecarResponse::Ready {
-            version: "0.1.4",
+            version: "0.1.6",
             sample_rate: SAMPLE_RATE_HZ,
             channels: CHANNELS,
             encoding: ENCODING,
@@ -163,8 +183,35 @@ mod tests {
         let json = serde_json::to_string(&response).expect("should serialize");
         assert_eq!(
             json,
-            r#"{"op":"ready","version":"0.1.4","sample_rate":22050,"channels":1,"encoding":"pcm16le","ops":["synthesize","phonemize"]}"#
+            r#"{"op":"ready","version":"0.1.6","sample_rate":22050,"channels":1,"encoding":"pcm16le","ops":["synthesize","phonemize"]}"#
         );
+    }
+
+    #[test]
+    fn phonemes_response_serializes_with_empty_words_array() {
+        let response = SidecarResponse::Phonemes {
+            id: "p1",
+            phonemes: "",
+            words: &[],
+        };
+        let json = serde_json::to_string(&response).expect("should serialize");
+        assert_eq!(json, r#"{"op":"phonemes","id":"p1","phonemes":"","words":[]}"#);
+    }
+
+    #[test]
+    fn phonemes_response_serializes_word_entries() {
+        let words = [
+            WordEntry { text: "hello", phonemes: "həlˈoʊ" },
+            WordEntry { text: "world", phonemes: "wˈɜːld" },
+        ];
+        let response = SidecarResponse::Phonemes {
+            id: "p1",
+            phonemes: "həlˈoʊ wˈɜːld",
+            words: &words,
+        };
+        let json = serde_json::to_string(&response).expect("should serialize");
+        assert!(json.contains(r#""words":[{"text":"hello","phonemes":"həlˈoʊ"}"#));
+        assert!(json.contains(r#"{"text":"world","phonemes":"wˈɜːld"}"#));
     }
 
     #[test]
@@ -286,6 +333,33 @@ mod tests {
             language: "".to_string(),
         };
         assert!(r.validate().is_err());
+    }
+
+    #[test]
+    fn phonemize_accepts_empty_or_whitespace_text() {
+        // Directive 2026-04-22e §P1.4: empty text is legal for phonemize.
+        for text in ["", "   ", "\t\n"] {
+            let r = PhonemizeRequest {
+                id: "r1".to_string(),
+                text: text.to_string(),
+                language: "en-US".to_string(),
+            };
+            assert!(
+                r.validate().is_ok(),
+                "phonemize should accept text {text:?} after directive 2026-04-22e"
+            );
+        }
+    }
+
+    #[test]
+    fn phonemize_still_rejects_text_above_char_limit() {
+        let r = PhonemizeRequest {
+            id: "r1".to_string(),
+            text: "a".repeat(MAX_TEXT_CHARS + 1),
+            language: "en-US".to_string(),
+        };
+        let err = r.validate().expect_err("oversized text should fail");
+        assert!(err.contains("8192"));
     }
 
     #[test]

@@ -68,6 +68,72 @@ try {
         throw "Smoke test failed: ready.ops must be ['synthesize','phonemize']. Got '$readyLine'."
     }
 
+    # Phonemize contract gate (directive 2026-04-22e §P0 smoke list).
+    # 1. Happy path: simple English text emits words array with non-empty phonemes
+    #    and the top-level string matches the v0.1.5 baseline byte-for-byte.
+    $happyRequest = @{
+        op = "phonemize"
+        id = "smoke-phonemize-1"
+        text = "I would like a cup of coffee"
+        language = "en-US"
+    } | ConvertTo-Json -Compress
+    $process.StandardInput.WriteLine($happyRequest)
+    $process.StandardInput.Flush()
+    $happyLine = $process.StandardOutput.ReadLine()
+    $happy = $happyLine | ConvertFrom-Json
+    if ($happy.op -ne "phonemes") {
+        throw "Smoke test failed: expected phonemes response, got '$happyLine'."
+    }
+    $expectedBaseline = "aɪ wʊd lˈaɪk ɐ kˈʌp ʌv kˈɔfi"
+    if ($happy.phonemes -ne $expectedBaseline) {
+        throw "Smoke test failed: top-level phonemes drift from v0.1.5 baseline. Expected '$expectedBaseline', got '$($happy.phonemes)'."
+    }
+    if (-not $happy.PSObject.Properties.Name.Contains("words")) {
+        throw "Smoke test failed: phonemes response missing 'words' field."
+    }
+    $happyWords = @($happy.words)
+    if ($happyWords.Count -lt 1) {
+        throw "Smoke test failed: words array must have at least one entry for a non-empty request."
+    }
+    foreach ($w in $happyWords) {
+        if ([string]::IsNullOrEmpty($w.text)) {
+            throw "Smoke test failed: word entry has empty text."
+        }
+        if ([string]::IsNullOrEmpty($w.phonemes)) {
+            throw "Smoke test failed: word entry has empty phonemes for text '$($w.text)'."
+        }
+    }
+
+    # 2. Empty text: returns {phonemes:"", words:[]} with no error.
+    $emptyRequest = @{ op = "phonemize"; id = "smoke-phonemize-2"; text = ""; language = "en-US" } | ConvertTo-Json -Compress
+    $process.StandardInput.WriteLine($emptyRequest)
+    $process.StandardInput.Flush()
+    $emptyLine = $process.StandardOutput.ReadLine()
+    $empty = $emptyLine | ConvertFrom-Json
+    if ($empty.op -ne "phonemes" -or $empty.phonemes -ne "" -or @($empty.words).Count -ne 0) {
+        throw "Smoke test failed: empty-text request did not return {phonemes:'',words:[]}. Got '$emptyLine'."
+    }
+
+    # 3. Unknown BCP-47 language: returns kind=unsupported_language, process stays alive.
+    $unsupportedRequest = @{ op = "phonemize"; id = "smoke-phonemize-3"; text = "hello"; language = "zz-ZZ" } | ConvertTo-Json -Compress
+    $process.StandardInput.WriteLine($unsupportedRequest)
+    $process.StandardInput.Flush()
+    $errLine = $process.StandardOutput.ReadLine()
+    $err = $errLine | ConvertFrom-Json
+    if ($err.op -ne "error" -or $err.kind -ne "unsupported_language") {
+        throw "Smoke test failed: unknown BCP-47 must return kind='unsupported_language'. Got '$errLine'."
+    }
+
+    # 4. Process must still be alive after the unsupported_language error.
+    $livenessRequest = @{ op = "phonemize"; id = "smoke-phonemize-4"; text = "hello"; language = "en-US" } | ConvertTo-Json -Compress
+    $process.StandardInput.WriteLine($livenessRequest)
+    $process.StandardInput.Flush()
+    $livenessLine = $process.StandardOutput.ReadLine()
+    $liveness = $livenessLine | ConvertFrom-Json
+    if ($liveness.op -ne "phonemes") {
+        throw "Smoke test failed: sidecar did not survive unsupported_language error. Got '$livenessLine'."
+    }
+
     $process.StandardInput.Close()
     $remainingStdout = $process.StandardOutput.ReadToEnd()
     $stderrText = $process.StandardError.ReadToEnd()
@@ -78,7 +144,7 @@ try {
     }
 
     if (-not [string]::IsNullOrEmpty($remainingStdout)) {
-        throw "Smoke test failed: stdout contained extra output after the ready line."
+        throw "Smoke test failed: stdout contained extra output after the phonemize gate."
     }
 
     Write-Host "Smoke test passed for $resolvedZipPath" -ForegroundColor Green

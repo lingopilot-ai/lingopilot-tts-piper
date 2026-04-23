@@ -315,6 +315,91 @@ fn phonemize_returns_phonemes_line_for_simple_english_text() {
         .as_str()
         .expect("phonemes field must be a string");
     assert!(!phonemes.is_empty(), "phonemes must be non-empty for 'hello'");
+    let words = response["words"]
+        .as_array()
+        .expect("words field must be an array");
+    assert_eq!(words.len(), 1);
+    assert_eq!(words[0]["text"], "hello");
+    assert!(!words[0]["phonemes"].as_str().unwrap().is_empty());
+}
+
+#[test]
+fn phonemize_response_includes_words_array_for_multi_word_english() {
+    let mut sidecar = SidecarHarness::spawn();
+    let _ready = sidecar.read_json_line();
+
+    sidecar.send_json(json!({
+        "op": "phonemize",
+        "id": "p1",
+        "text": "I would like a cup of coffee",
+        "language": "en-US",
+    }));
+    let response = sidecar.read_json_line();
+    assert_eq!(response["op"], "phonemes");
+    let words = response["words"]
+        .as_array()
+        .expect("words must be an array");
+    assert_eq!(words.len(), 7);
+    let reconstructed: Vec<String> = words
+        .iter()
+        .map(|w| w["text"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(reconstructed.join(" "), "I would like a cup of coffee");
+    for w in words {
+        assert!(!w["phonemes"].as_str().unwrap().is_empty());
+    }
+}
+
+#[test]
+fn phonemize_response_has_empty_words_for_empty_text() {
+    let mut sidecar = SidecarHarness::spawn();
+    let _ready = sidecar.read_json_line();
+
+    sidecar.send_json(json!({
+        "op": "phonemize",
+        "id": "p1",
+        "text": "",
+        "language": "en-US",
+    }));
+    let response = sidecar.read_json_line();
+    assert_eq!(response["op"], "phonemes");
+    assert_eq!(response["id"], "p1");
+    assert_eq!(response["phonemes"], "");
+    assert_eq!(response["words"], json!([]));
+}
+
+#[test]
+fn phonemize_response_has_empty_words_for_whitespace_only_text() {
+    let mut sidecar = SidecarHarness::spawn();
+    let _ready = sidecar.read_json_line();
+
+    sidecar.send_json(json!({
+        "op": "phonemize",
+        "id": "p1",
+        "text": "   \t  ",
+        "language": "en-US",
+    }));
+    let response = sidecar.read_json_line();
+    assert_eq!(response["op"], "phonemes");
+    assert_eq!(response["phonemes"], "");
+    assert_eq!(response["words"], json!([]));
+}
+
+#[test]
+fn phonemize_response_has_empty_words_for_punct_only_text() {
+    let mut sidecar = SidecarHarness::spawn();
+    let _ready = sidecar.read_json_line();
+
+    sidecar.send_json(json!({
+        "op": "phonemize",
+        "id": "p1",
+        "text": "... !! ??",
+        "language": "en-US",
+    }));
+    let response = sidecar.read_json_line();
+    assert_eq!(response["op"], "phonemes");
+    assert_eq!(response["phonemes"], "");
+    assert_eq!(response["words"], json!([]));
 }
 
 #[test]
@@ -335,7 +420,7 @@ fn phonemize_rejects_empty_language() {
 }
 
 #[test]
-fn phonemize_reports_phonemize_failed_for_unknown_language() {
+fn phonemize_returns_unsupported_language_for_unknown_bcp47() {
     let mut sidecar = SidecarHarness::spawn();
     let _ready = sidecar.read_json_line();
 
@@ -343,11 +428,92 @@ fn phonemize_reports_phonemize_failed_for_unknown_language() {
         "op": "phonemize",
         "id": "p1",
         "text": "hello",
-        "language": "xx-nonexistent",
+        "language": "zz-ZZ",
     }));
     let error = sidecar.read_json_line();
     assert_eq!(error["op"], "error");
-    assert_eq!(error["kind"], "phonemize_failed");
+    assert_eq!(error["kind"], "unsupported_language");
+    assert_eq!(error["id"], "p1");
+    assert!(error["message"].as_str().unwrap().contains("zz-ZZ"));
+
+    // Process stays alive for a subsequent valid request.
+    sidecar.send_json(json!({
+        "op": "phonemize",
+        "id": "p2",
+        "text": "hello",
+        "language": "en-US",
+    }));
+    let response = sidecar.read_json_line();
+    assert_eq!(response["op"], "phonemes");
+    assert_eq!(response["id"], "p2");
+}
+
+#[test]
+fn phonemize_top_level_string_matches_v0_1_5_baseline_fixture() {
+    let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/phoneme_baseline_v0_1_5.json");
+    let raw = fs::read_to_string(&fixture_path).expect("baseline fixture must exist");
+    let fixture: Value = serde_json::from_str(&raw).expect("baseline must be JSON");
+    let entries = fixture["entries"]
+        .as_array()
+        .expect("baseline.entries must be an array");
+    let language = fixture["language"].as_str().unwrap_or("en-us");
+
+    let mut sidecar = SidecarHarness::spawn();
+    let _ready = sidecar.read_json_line();
+
+    for (i, entry) in entries.iter().enumerate() {
+        let text = entry["text"].as_str().unwrap();
+        let expected = entry["phonemes"].as_str().unwrap();
+
+        sidecar.send_json(json!({
+            "op": "phonemize",
+            "id": format!("baseline-{i}"),
+            "text": text,
+            "language": language,
+        }));
+        let response = sidecar.read_json_line();
+        assert_eq!(response["op"], "phonemes", "entry {i}: {text}");
+        assert_eq!(
+            response["phonemes"].as_str().unwrap(),
+            expected,
+            "byte-identity regression for entry {i}: {text:?}"
+        );
+    }
+}
+
+#[test]
+fn phonemize_output_is_deterministic_across_iterations() {
+    let mut sidecar = SidecarHarness::spawn();
+    let _ready = sidecar.read_json_line();
+
+    let text = "I would like a cup of coffee";
+    let mut first: Option<(String, Value)> = None;
+    for i in 0..10 {
+        sidecar.send_json(json!({
+            "op": "phonemize",
+            "id": format!("det-{i}"),
+            "text": text,
+            "language": "en-US",
+        }));
+        let response = sidecar.read_json_line();
+        assert_eq!(response["op"], "phonemes");
+        let phonemes = response["phonemes"].as_str().unwrap().to_string();
+        let words = response["words"].clone();
+        match &first {
+            None => first = Some((phonemes, words)),
+            Some((prev_phonemes, prev_words)) => {
+                assert_eq!(
+                    &phonemes, prev_phonemes,
+                    "phonemize should be deterministic across iterations"
+                );
+                assert_eq!(
+                    &words, prev_words,
+                    "words should be deterministic across iterations"
+                );
+            }
+        }
+    }
 }
 
 #[test]

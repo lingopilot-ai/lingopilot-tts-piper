@@ -1,6 +1,6 @@
 [package]
 name = "lingopilot-tts-piper"
-version = "0.1.5"
+version = "0.1.6"
 edition = "2021"
 description = "A fast, local TTS sidecar that reads JSON from stdin and outputs PCM audio. Powered by Piper + eSpeak-NG."
 license = "GPL-3.0-only"

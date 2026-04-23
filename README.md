@@ -18,7 +18,7 @@ Linux and macOS are validated as compile targets in CI, but they are not yet off
 
 | Area | `lingopilot-tts-piper` | `lingopilot-tts-kokoro` |
 |------|-------------------------|-------------------------|
-| `speed` range | `0.5` to `5.5` inclusive | `0.5` to `2.0` inclusive |
+| `speed` range | `0.5` to `2.0` inclusive | `0.5` to `5.5` inclusive |
 | Sample rate | Voice-dependent, typically `22050` | Fixed `24000` |
 | `model_dir` layout | Per-voice `<voice>.onnx` and `<voice>.onnx.json` files | Shared bundle with one model plus `voices*.bin` |
 | eSpeak linkage | Static linkage through `espeak-rs-sys` | Runtime loading via `libloading` |
@@ -57,7 +57,7 @@ The sidecar takes no CLI arguments. At startup it auto-discovers the eSpeak runt
 On successful startup, the sidecar emits exactly one newline-delimited `ready` JSON object on `stdout`:
 
 ```json
-{"type":"ready","version":"0.1.3"}
+{"op":"ready","version":"0.1.6","sample_rate":22050,"channels":1,"encoding":"pcm16le","ops":["synthesize","phonemize"]}
 ```
 
 The `version` value comes from the package version at build time. If startup validation fails, the sidecar writes `Startup error: ...` to `stderr`, exits with a non-zero status, and emits no `ready` message.
@@ -153,14 +153,18 @@ if ($actual -ne $expected) {
 Host                          Sidecar
  |                               |
  |--- spawn process ------------>|
- |                               |--- {"type":"ready"} ---> stdout
+ |                               |--- {"op":"ready", ...} ---------> stdout
  |                               |
- |--- {"text":"..."}\n ------->  stdin
- |                               |--- {"type":"audio"} ---> stdout
- |                               |--- [PCM16 bytes] ------> stdout
+ |--- {"op":"synthesize", ...}\n -> stdin
+ |                               |--- {"op":"audio", ...} ---------> stdout
+ |                               |--- [PCM16 bytes] ---------------> stdout
+ |                               |--- {"op":"done", ...} ----------> stdout
  |                               |
- |--- {"text":"..."}\n ------->  stdin
- |                               |--- {"type":"error"} ---> stdout
+ |--- {"op":"phonemize", ...}\n -> stdin
+ |                               |--- {"op":"phonemes", "words": [...]} -> stdout
+ |                               |
+ |--- {"op":"synthesize", ...}\n -> stdin
+ |                               |--- {"op":"error", ...} ---------> stdout
  |                               |
  |--- close stdin -------------->|  (sidecar exits cleanly)
 ```
@@ -195,24 +199,35 @@ If startup validation fails:
 - Requests are decoded with strict field checking. Unknown fields are rejected.
 - Closing `stdin` terminates the process cleanly.
 
-### Request Schema
+### Request Schema — `synthesize`
 
 | Field | Type | Required | Contract |
 |-------|------|----------|----------|
+| `op` | string | yes | Must be `"synthesize"`. |
+| `id` | string | yes | Client-chosen correlation id. 1 to 128 bytes. |
 | `text` | string | yes | Text to synthesize. Must contain at least one non-whitespace character and be at most `8192` Unicode scalar values. |
-| `voice` | string | yes | Piper voice ID. Must contain at least one non-whitespace character and exactly match `<voice>.onnx` and `<voice>.onnx.json` inside `model_dir`. |
-| `speed` | number | no | Speed multiplier. Defaults to `1.0`. Must be finite and between `0.5` and `5.5` inclusive. |
-| `model_dir` | string | yes | Absolute path to an existing directory that contains the requested voice files. Must contain at least one non-whitespace character. |
+| `voice_model_path` | string | yes | Absolute path to the `<voice>.onnx` file. |
+| `voice_config_path` | string | yes | Absolute path to the `<voice>.onnx.json` file. |
+| `speaker_id` | integer | no | Optional speaker slot; defaults to `0`. |
+| `speed` | number | no | Speed multiplier. Defaults to `1.0`. Must be finite; clamped to `[0.5, 2.0]` inclusive. |
 
-Example request:
+Example `synthesize` request:
 
 ```json
-{"text":"Hello, how are you?","voice":"en_US-hfc_female-medium","speed":1.0,"model_dir":"C:\\voices\\en_US-hfc_female-medium"}
+{"op":"synthesize","id":"r1","text":"Hello, how are you?","voice_model_path":"C:\\voices\\en_US-hfc_female-medium\\en_US-hfc_female-medium.onnx","voice_config_path":"C:\\voices\\en_US-hfc_female-medium\\en_US-hfc_female-medium.onnx.json","speed":1.0}
 ```
+
+### Request Schema — `phonemize`
+
+| Field | Type | Required | Contract |
+|-------|------|----------|----------|
+| `op` | string | yes | Must be `"phonemize"`. |
+| `id` | string | yes | Client-chosen correlation id. 1 to 128 bytes. |
+| `text` | string | yes | Text to phonemize. May be empty, whitespace-only, or punctuation-only; returns `{phonemes:"", words:[]}` in those cases. |
+| `language` | string | yes | BCP-47 language tag (see [Phonemize Contract](#phonemize-contract)). Unknown tags return `kind:"unsupported_language"`. |
 
 Additional request rules:
 
-- `language` is not part of the request contract. Requests that include it are rejected as invalid request payloads.
 - `espeak_data_dir` is not part of the request contract. eSpeak is selected only at process startup.
 - Voice resolution is strict. If `<voice>.onnx` or `<voice>.onnx.json` is missing, the sidecar returns an `error` response and never falls back to a different model.
 - Piper models are cached by resolved voice config path for the lifetime of the process. Repeated requests for the same resolved voice reuse the loaded model/session.
@@ -223,19 +238,76 @@ Additional request rules:
 
 The sidecar writes exactly one newline-delimited JSON object per response on `stdout`.
 
-| Type | Fields | Contract |
+| `op` | Fields | Contract |
 |------|--------|----------|
-| `ready` | `version` | Emitted exactly once after successful startup. No binary data follows. |
-| `audio` | `byte_length`, `sample_rate`, `channels` | Successful synthesis header. Immediately after the newline, exactly `byte_length` bytes of audio follow on `stdout`. |
-| `error` | `message` | Error response. JSON only; no audio bytes follow. The process stays alive for later requests unless `stdin` is closed. |
+| `ready` | `version`, `sample_rate`, `channels`, `encoding`, `ops` | Emitted exactly once after successful startup. No binary data follows. |
+| `audio` | `id`, `bytes`, `sample_rate`, `channels` | Successful synthesis header. Immediately after the newline, exactly `bytes` bytes of audio follow on `stdout`. |
+| `done` | `id` | Emitted after the PCM payload for a `synthesize` request. |
+| `phonemes` | `id`, `phonemes`, `words` | Response for a `phonemize` request. `phonemes` is the legacy top-level IPA string. `words` is always present (possibly empty). |
+| `error` | `id`, `kind`, `message` | Error response. JSON only; no audio bytes follow. The process stays alive for later requests unless `stdin` is closed. |
 
 Example `audio` header:
 
 ```json
-{"type":"audio","byte_length":123456,"sample_rate":22050,"channels":1}
+{"op":"audio","id":"r1","bytes":123456,"sample_rate":22050,"channels":1}
 ```
 
-`byte_length` is the number of raw audio bytes in this response. `sample_rate` is model-dependent. `channels` is always `1`.
+`bytes` is the number of raw audio bytes in this response. `sample_rate` is model-dependent. `channels` is always `1`.
+
+Example `phonemes` response:
+
+```json
+{"op":"phonemes","id":"p1","phonemes":"aɪ wʊd lˈaɪk ɐ kˈʌp ʌv kˈɔfi","words":[{"text":"I","phonemes":"aɪ"},{"text":"would","phonemes":"wʊd"},{"text":"like","phonemes":"lˈaɪk"},{"text":"a","phonemes":"ɐ"},{"text":"cup","phonemes":"kˈʌp"},{"text":"of","phonemes":"ʌv"},{"text":"coffee","phonemes":"kˈɔfi"}]}
+```
+
+### Phonemize Contract
+
+Introduced in `v0.1.6` per sidecar directive `2026-04-22e` (word-aligned output).
+
+**Top-level output**:
+
+- The top-level `phonemes` string is the raw eSpeak-NG IPA for the full input. It is produced by a single `espeak_TextToPhonemes` invocation and is preserved **byte-for-byte** vs `v0.1.5` for the same `(text, language)` pair. Hosts that consumed the legacy string (e.g. the Kokoro bridge) keep working unchanged.
+
+**Per-word output**:
+
+- `words` is always present. It is an ordered array of `{text, phonemes}` entries, where `words[i].text` reconstructs the input modulo whitespace.
+- Tokenization policy: input is split on ASCII whitespace, then each token has leading/trailing punctuation (`,.!?;:"'()[]{}…—–`) stripped. Apostrophes *inside* a token are preserved, so `"I'd"` stays a single entry.
+- Best-effort alignment: the top-level IPA is split on ASCII whitespace and zipped 1:1 with the input tokens. When counts disagree (e.g. eSpeak merges two adjacent tokens across punctuation into one IPA blob), trailing IPA tokens are concatenated into the last `words[]` entry so every input token has a textual slot and no IPA byte is dropped. This is a weak invariant — `words[].phonemes` joined by spaces is NOT asserted byte-equal to the top-level string.
+
+**Empty input is legal**:
+
+- Empty, whitespace-only, or punctuation-only `text` returns `{"phonemes":"","words":[]}` with no error. Hosts may use this to probe the sidecar without generating work.
+
+**BCP-47 language map** (v0.1.6 coverage):
+
+| Accepted tags | eSpeak-NG voice |
+|---------------|-----------------|
+| `en-US` | `en-us` |
+| `en-GB` | `en-gb` |
+| `en` | `en` |
+| `pt-BR` | `pt-br` |
+| `pt-PT`, `pt` | `pt` |
+| `de`, `de-DE` | `de` |
+| `es`, `es-ES` | `es` |
+| `fr`, `fr-FR` | `fr` |
+| `ca`, `ca-ES` | `ca` |
+| `pl`, `pl-PL` | `pl` |
+| `ru`, `ru-RU` | `ru` |
+
+Tags are matched case-insensitively. Any tag outside this table returns a `{"op":"error","kind":"unsupported_language"}` response; the process stays alive.
+
+**IPA inventory & stress markers**:
+
+- The sidecar emits eSpeak-NG 1.52 IPA with no phoneme separators. See the [upstream phoneme tables](https://github.com/espeak-ng/espeak-ng/blob/1.52.0/docs/phonemes.md) for the inventory per voice.
+- Primary stress (`ˈ`, U+02C8) and secondary stress (`ˌ`, U+02CC) are both emitted and preserved in both `phonemes` and `words[].phonemes`.
+
+**Determinism**:
+
+- For a fixed `(text, language)` pair, `phonemes` and `words[]` are byte-deterministic across invocations within the same process *and* across process restarts on the same build. Regressions are gated by the byte-identity fixture at `tests/fixtures/phoneme_baseline_v0_1_5.json`.
+
+**Latency SLO**:
+
+- Target ≤ 30 ms for typical single-sentence English (≤ 80 characters) on a warmed-up process. eSpeak initialization is a one-time cost deferred to the first `phonemize` request.
 
 ### Audio Format
 

@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use protocol::{
-    PhonemizeRequest, SidecarRequest, SidecarResponse, SynthesizeRequest, CHANNELS, ENCODING,
-    SAMPLE_RATE_HZ, SUPPORTED_OPS,
+    PhonemizeRequest, SidecarRequest, SidecarResponse, SynthesizeRequest, WordEntry, CHANNELS,
+    ENCODING, SAMPLE_RATE_HZ, SUPPORTED_OPS,
 };
 use tracing::field::{Field, Visit};
 use tracing::{Event, Subscriber};
@@ -290,20 +290,41 @@ fn handle_phonemize(req: PhonemizeRequest) {
         text_len = req.text.chars().count()
     );
 
-    match phonemize::phonemize(&req.text, &req.language) {
-        Ok(phonemes) => {
+    match phonemize::phonemize_with_words(&req.text, &req.language) {
+        Ok(result) => {
+            let entries: Vec<WordEntry<'_>> = result
+                .words
+                .iter()
+                .map(|w| WordEntry {
+                    text: w.text.as_str(),
+                    phonemes: w.phonemes.as_str(),
+                })
+                .collect();
             let _ = send_response(&SidecarResponse::Phonemes {
                 id: &req.id,
-                phonemes: &phonemes,
+                phonemes: &result.phonemes,
+                words: &entries,
             });
             tracing::debug!(
                 event = "request_succeeded",
                 op = "phonemize",
                 id = req.id.as_str(),
-                phoneme_len = phonemes.chars().count()
+                phoneme_len = result.phonemes.chars().count(),
+                word_count = entries.len() as u64
             );
         }
-        Err(message) => {
+        Err(phonemize::PhonemizeError::UnsupportedLanguage(code)) => {
+            let message = format!("BCP-47 code '{code}' not supported");
+            tracing::warn!(
+                event = "request_failed",
+                op = "phonemize",
+                id = req.id.as_str(),
+                language = code.as_str(),
+                detail = message.as_str()
+            );
+            send_error(Some(&req.id), "unsupported_language", &message);
+        }
+        Err(phonemize::PhonemizeError::EspeakFailure(message)) => {
             tracing::warn!(
                 event = "request_failed",
                 op = "phonemize",

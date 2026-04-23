@@ -1,0 +1,66 @@
+{
+  "generated_with_version": "0.1.5",
+  "language": "en-us",
+  "entries": [
+    {
+      "text": "hello",
+      "phonemes": "həlˈoʊ"
+    },
+    {
+      "text": "I would like a cup of coffee",
+      "phonemes": "aɪ wʊd lˈaɪk ɐ kˈʌp ʌv kˈɔfi"
+    },
+    {
+      "text": "The quick brown fox jumps over the lazy dog",
+      "phonemes": "ðə kwˈɪk bɹˈaʊn fˈɑːks dʒˈʌmps ˌoʊvɚ ðə lˈeɪzi dˈɑːɡ"
+    },
+    {
+      "text": "She sells seashells by the seashore",
+      "phonemes": "ʃiː sˈɛlz sˈiːʃɛlz baɪ ðə sˈiːʃɔːɹ"
+    },
+    {
+      "text": "How much wood would a woodchuck chuck",
+      "phonemes": "hˌaʊ mˈʌtʃ wˈʊd wʊd ɐ wˈʊdtʃʌk tʃˈʌk"
+    },
+    {
+      "text": "I'd like to know",
+      "phonemes": "aɪd lˈaɪk tə nˈoʊ"
+    },
+    {
+      "text": "Peter Piper picked a peck of pickled peppers",
+      "phonemes": "pˈiːɾɚ pˈaɪpɚ pˈɪkt ɐ pˈɛk ʌv pˈɪkəld pˈɛpɚz"
+    },
+    {
+      "text": "Good morning, everyone",
+      "phonemes": "ɡˈʊd mˈɔːɹnɪŋˈɛvɹɪwˌʌn"
+    },
+    {
+      "text": "Release readiness validation.",
+      "phonemes": "ɹᵻlˈiːs ɹˈɛdinəs vˌælɪdˈeɪʃən"
+    },
+    {
+      "text": "Can you hear me now?",
+      "phonemes": "kæn juː hˈɪɹ mˌiː nˈaʊ"
+    },
+    {
+      "text": "This is a test of the emergency broadcast system",
+      "phonemes": "ðɪs ɪz ɐ tˈɛst ʌvðɪ ɪmˈɜːdʒənsi bɹˈɔːdkæst sˈɪstəm"
+    },
+    {
+      "text": "Please remain calm and stay seated",
+      "phonemes": "plˈiːz ɹᵻmˈeɪn kˈɑːm ænd stˈeɪ sˈiːɾᵻd"
+    },
+    {
+      "text": "We apologize for the inconvenience",
+      "phonemes": "wiː ɐpˈɑːlədʒˌaɪz fɚðɪ ɪŋkənvˈiːnɪəns"
+    },
+    {
+      "text": "Thank you for your patience and understanding",
+      "phonemes": "θˈæŋk juː fɔːɹ jʊɹ pˈeɪʃəns ænd ˌʌndɚstˈændɪŋ"
+    },
+    {
+      "text": "All systems are functioning normally",
+      "phonemes": "ˈɔːl sˈɪstəmz ɑːɹ fˈʌŋkʃənɪŋ nˈɔːɹməli"
+    }
+  ]
+}
