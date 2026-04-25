@@ -198,6 +198,9 @@ fn handle_request(cache: &mut synthesis::SynthesisCache, request: SidecarRequest
     match request {
         SidecarRequest::Synthesize(r) => handle_synthesize(cache, r),
         SidecarRequest::Phonemize(r) => handle_phonemize(r),
+        // Ping dispatch is wired in Stage 2 (H-01); this arm is unreachable
+        // because the Stage 2 stdin loop matches Ping before calling handle_request.
+        SidecarRequest::Ping(_) => unreachable!("ping must be dispatched before handle_request"),
     }
 }
 

@@ -18,6 +18,14 @@ pub enum SidecarRequest {
     Synthesize(SynthesizeRequest),
     #[serde(rename = "phonemize")]
     Phonemize(PhonemizeRequest),
+    #[serde(rename = "ping")]
+    Ping(PingRequest),
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PingRequest {
+    pub id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -51,6 +59,7 @@ impl SidecarRequest {
         match self {
             SidecarRequest::Synthesize(r) => &r.id,
             SidecarRequest::Phonemize(r) => &r.id,
+            SidecarRequest::Ping(r) => &r.id,
         }
     }
 
@@ -58,6 +67,7 @@ impl SidecarRequest {
         match self {
             SidecarRequest::Synthesize(r) => r.validate(),
             SidecarRequest::Phonemize(r) => r.validate(),
+            SidecarRequest::Ping(r) => validate_id(&r.id),
         }
     }
 }
@@ -164,6 +174,8 @@ pub enum SidecarResponse<'a> {
         kind: &'a str,
         message: &'a str,
     },
+    #[serde(rename = "pong")]
+    Pong { id: &'a str },
 }
 
 #[cfg(test)]
@@ -370,5 +382,50 @@ mod tests {
                 .expect_err("reserved op should not deserialize");
             assert!(error.to_string().contains("unknown variant"));
         }
+    }
+
+    // --- H-01 ping / pong tests (ADR §4.2) ---
+
+    #[test]
+    fn ping_request_deserializes() {
+        let request = r#"{"op":"ping","id":"h1"}"#;
+        let parsed: SidecarRequest =
+            serde_json::from_str(request).expect("ping should deserialize");
+        match parsed {
+            SidecarRequest::Ping(r) => assert_eq!(r.id, "h1"),
+            _ => panic!("expected Ping variant"),
+        }
+    }
+
+    #[test]
+    fn ping_request_rejects_extra_fields() {
+        let request = r#"{"op":"ping","id":"h1","extra":"bad"}"#;
+        let error = serde_json::from_str::<SidecarRequest>(request)
+            .expect_err("extra field should be rejected by deny_unknown_fields");
+        assert!(
+            error.to_string().contains("unknown field") || error.to_string().contains("extra"),
+            "unexpected error message: {error}"
+        );
+    }
+
+    #[test]
+    fn ping_request_rejects_empty_id() {
+        let req = SidecarRequest::Ping(PingRequest { id: String::new() });
+        let err = req.validate().expect_err("empty id should fail");
+        assert!(err.contains("empty"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn ping_request_rejects_oversize_id() {
+        let req = SidecarRequest::Ping(PingRequest { id: "x".repeat(129) });
+        let err = req.validate().expect_err("129-byte id should fail");
+        assert!(err.contains("128 bytes"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn pong_response_serializes() {
+        let response = SidecarResponse::Pong { id: "h1" };
+        let json = serde_json::to_string(&response).expect("pong should serialize");
+        assert_eq!(json, r#"{"op":"pong","id":"h1"}"#);
     }
 }
