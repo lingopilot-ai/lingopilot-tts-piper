@@ -27,3 +27,4 @@ Validated locally in this repository:
 - Local real-voice validation passed with exact `byte_length` checks using the canonical `en_US-hfc_female-medium` fixture and a compatible `onnxruntime.dll`.
 - The published `v0.1.2` GitHub Release asset and checksum were downloaded and verified through the documented downstream path.
 - Vendored `espeak-rs-sys` governance is documented in `docs/vendor-espeak-rs-sys.md`.
+- `op:ping` / `op:pong` wire contract validated at `0.1.7`: `SidecarRequest::Ping` and `SidecarResponse::Pong` in `src/protocol.rs` with `deny_unknown_fields`; ping dispatched before the synthesis worker in `src/main.rs`; integration test in `tests/ping_contract.rs` confirms pong is byte-exact `{"op":"pong","id":"h1"}` and does not disturb PCM framing between two synthesis requests. `ping` is absent from `SUPPORTED_OPS`. Ordering invariant (ADR §5.1) structurally preserved by the serial stdin loop.

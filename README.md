@@ -57,7 +57,7 @@ The sidecar takes no CLI arguments. At startup it auto-discovers the eSpeak runt
 On successful startup, the sidecar emits exactly one newline-delimited `ready` JSON object on `stdout`:
 
 ```json
-{"op":"ready","version":"0.1.6","sample_rate":22050,"channels":1,"encoding":"pcm16le","ops":["synthesize","phonemize"]}
+{"op":"ready","version":"0.1.7","sample_rate":22050,"channels":1,"encoding":"pcm16le","ops":["synthesize","phonemize"]}
 ```
 
 The `version` value comes from the package version at build time. If startup validation fails, the sidecar writes `Startup error: ...` to `stderr`, exits with a non-zero status, and emits no `ready` message.
@@ -226,6 +226,23 @@ Example `synthesize` request:
 | `text` | string | yes | Text to phonemize. May be empty, whitespace-only, or punctuation-only; returns `{phonemes:"", words:[]}` in those cases. |
 | `language` | string | yes | BCP-47 language tag (see [Phonemize Contract](#phonemize-contract)). Unknown tags return `kind:"unsupported_language"`. |
 
+### Request Schema — `ping`
+
+| Field | Type | Required | Contract |
+|-------|------|----------|----------|
+| `op` | string | yes | Must be `"ping"`. |
+| `id` | string | yes | Client-chosen correlation id. 1 to 128 bytes. Echoed byte-for-byte in the `pong` response. |
+
+`ping` is a base-protocol health-check op available from protocol version `>= 0.1.7`. It is **not** listed in the `ops` array of the `ready` response and must never appear in `SUPPORTED_OPS`. A `ping` is dispatched before the synthesis worker, so it always responds promptly regardless of synthesis activity.
+
+Wire shape (locked):
+
+```json
+{"op":"ping","id":"<correlation-id>"}
+```
+
+No extra fields are accepted (`deny_unknown_fields` applies). An empty or oversize `id` returns a normal `error` response with `kind:"bad_request"`. The process stays alive.
+
 Additional request rules:
 
 - `espeak_data_dir` is not part of the request contract. eSpeak is selected only at process startup.
@@ -244,6 +261,7 @@ The sidecar writes exactly one newline-delimited JSON object per response on `st
 | `audio` | `id`, `bytes`, `sample_rate`, `channels` | Successful synthesis header. Immediately after the newline, exactly `bytes` bytes of audio follow on `stdout`. |
 | `done` | `id` | Emitted after the PCM payload for a `synthesize` request. |
 | `phonemes` | `id`, `phonemes`, `words` | Response for a `phonemize` request. `phonemes` is the legacy top-level IPA string. `words` is always present (possibly empty). |
+| `pong` | `id` | Health-check response. Echoes the `id` from the corresponding `ping` request. JSON only; no binary data follows. Available from `>= 0.1.7`. |
 | `error` | `id`, `kind`, `message` | Error response. JSON only; no audio bytes follow. The process stays alive for later requests unless `stdin` is closed. |
 
 Example `audio` header:
@@ -259,6 +277,30 @@ Example `phonemes` response:
 ```json
 {"op":"phonemes","id":"p1","phonemes":"aɪ wʊd lˈaɪk ɐ kˈʌp ʌv kˈɔfi","words":[{"text":"I","phonemes":"aɪ"},{"text":"would","phonemes":"wʊd"},{"text":"like","phonemes":"lˈaɪk"},{"text":"a","phonemes":"ɐ"},{"text":"cup","phonemes":"kˈʌp"},{"text":"of","phonemes":"ʌv"},{"text":"coffee","phonemes":"kˈɔfi"}]}
 ```
+
+### Health Check (`op:ping` / `op:pong`)
+
+Available from protocol version `>= 0.1.7`. The host sends a `ping` request; the sidecar replies with a `pong` response that echoes the `id` byte-for-byte. The exchange proves the sidecar process is alive and reading `stdin` without touching the synthesis worker, model cache, ONNX runtime, or eSpeak.
+
+**Wire shape (locked):**
+
+Request:
+
+```json
+{"op":"ping","id":"<correlation-id>"}
+```
+
+Response:
+
+```json
+{"op":"pong","id":"<correlation-id>"}
+```
+
+**Floor version:** hosts must gate `HealthStrategy::Ping` on `ready.version >= "0.1.7"`.
+
+**Ordering invariant:** `pong` is never emitted between an `audio` line and its corresponding `done` line. The single-threaded serial stdin loop structurally guarantees this — the next request is not read until the current synthesis finishes. See ADR `docs/adr-health-ping.md` §5.1 for the full invariant and guidance for any future concurrent-dispatch migration.
+
+**Discovery:** `ping` is a base-protocol op and does not appear in the `ops` array of the `ready` response.
 
 ### Phonemize Contract
 
