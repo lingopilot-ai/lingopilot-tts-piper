@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use protocol::{
-    PhonemizeRequest, SidecarRequest, SidecarResponse, SynthesizeRequest, WordEntry, CHANNELS,
-    ENCODING, SAMPLE_RATE_HZ, SUPPORTED_OPS,
+    PhonemizeRequest, PingRequest, SidecarRequest, SidecarResponse, SynthesizeRequest, WordEntry,
+    CHANNELS, ENCODING, SAMPLE_RATE_HZ, SUPPORTED_OPS,
 };
 use tracing::field::{Field, Visit};
 use tracing::{Event, Subscriber};
@@ -146,6 +146,10 @@ fn main() -> ExitCode {
         }
 
         match parse_request(&line) {
+            Ok(SidecarRequest::Ping(PingRequest { id })) => {
+                tracing::trace!(event = "ping", id = %id);
+                let _ = send_response(&SidecarResponse::Pong { id: &id });
+            }
             Ok(request) => handle_request(&mut synthesis_cache, request),
             Err((id, kind, message)) => {
                 tracing::warn!(
@@ -198,8 +202,6 @@ fn handle_request(cache: &mut synthesis::SynthesisCache, request: SidecarRequest
     match request {
         SidecarRequest::Synthesize(r) => handle_synthesize(cache, r),
         SidecarRequest::Phonemize(r) => handle_phonemize(r),
-        // Ping dispatch is wired in Stage 2 (H-01); this arm is unreachable
-        // because the Stage 2 stdin loop matches Ping before calling handle_request.
         SidecarRequest::Ping(_) => unreachable!("ping must be dispatched before handle_request"),
     }
 }
@@ -446,6 +448,16 @@ mod tests {
         let (_id, kind, _message) = parse_request(r#"{"op":"cancel","id":"r1"}"#)
             .expect_err("cancel is not supported");
         assert_eq!(kind, "bad_request");
+    }
+
+    #[test]
+    fn parse_request_accepts_ping() {
+        use crate::protocol::SidecarRequest;
+        let result = parse_request(r#"{"op":"ping","id":"h1"}"#);
+        assert!(
+            matches!(result, Ok(SidecarRequest::Ping(_))),
+            "expected Ok(SidecarRequest::Ping(_)), got {result:?}"
+        );
     }
 
     #[test]
